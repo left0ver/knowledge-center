@@ -23,8 +23,7 @@ export default defineConfig({
     ],
     [
       'script',
-    {},
-    'import { inject } from "@vercel/analytics"'
+    {async:'',src: 'https://cdn.vercel-insights.com/v1/script.debug.js'},
   ]
   ],
   cleanUrls:true,
