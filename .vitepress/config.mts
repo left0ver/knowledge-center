@@ -8,6 +8,7 @@ export default defineConfig({
   sitemap: {
     hostname: 'https://note.leftover.cn',
   },
+  cleanUrls:true,
   markdown: {
     lineNumbers: true
   },
