@@ -26,8 +26,8 @@ export default defineConfig({
     lastUpdated: {
       text: '上一次更新时间',
       formatOptions: {
-        dateStyle: 'full',
-        timeStyle: 'medium'
+        dateStyle: 'medium',
+        timeStyle: undefined
       }
     },
     sidebarMenuLabel:"菜单",
