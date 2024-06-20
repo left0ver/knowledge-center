@@ -21,10 +21,7 @@ export default defineConfig({
       gtag('js', new Date());
       gtag('config', 'GTM-PZPSHWWJ');`
     ],
-    [
-      'script',
-    {async:'',src: 'https://cdn.jsdelivr.net/npm/@vercel/analytics@1.3.1/dist/index.min.js'},
-  ]
+    ["script", { src: "/_vercel/insights/script.js", defer: '' }]
   ],
   cleanUrls:true,
   markdown: {
