@@ -5,7 +5,6 @@ export default defineConfig({
   description: '存放一些自己的一些学习笔记',
   srcDir:"src",
   lastUpdated:true,
-  appearance:"dark",
   sitemap: {
     hostname: 'https://note.leftover.cn',
   },
