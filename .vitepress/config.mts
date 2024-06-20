@@ -58,7 +58,8 @@ export default defineConfig({
           { text: 'Springboot', link: 'springboot' },
           { text: 'JSR', link: 'JSR' },
           {text: 'SQL',link: 'sql'},
-          {text: 'Maven', link: 'Maven'}          
+          {text: 'Maven', link: 'Maven'},          
+          {text: 'Java面试题', link: 'Java面试题'}          
         ]
       },
     ],
