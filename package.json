@@ -1,0 +1,17 @@
+{
+  "name": "知识库",
+  "version": "0.0.1",
+  "description": "本人的知识库,存放一些自己做的笔记",
+  "main": "index.js",
+  "scripts": {
+    "docs:dev": "vitepress dev",
+    "docs:build": "vitepress build",
+    "docs:preview": "vitepress preview"
+  },
+  "keywords": [],
+  "author": "left0ver",
+  "license": "CC BY-NC-SA",
+  "devDependencies": {
+    "vitepress": "^1.2.3"
+  }
+}
