@@ -8,6 +8,20 @@ export default defineConfig({
   sitemap: {
     hostname: 'https://note.leftover.cn',
   },
+  head: [
+    [
+      'script',
+      { async: '', src: 'https://www.googletagmanager.com/gtag/js?id=GTM-PZPSHWWJ' }
+    ],
+    [
+      'script',
+      {},
+      `window.dataLayer = window.dataLayer || [];
+      function gtag(){dataLayer.push(arguments);}
+      gtag('js', new Date());
+      gtag('config', 'GTM-PZPSHWWJ');`
+    ]
+  ],
   cleanUrls:true,
   markdown: {
     lineNumbers: true
