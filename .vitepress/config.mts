@@ -20,7 +20,12 @@ export default defineConfig({
       function gtag(){dataLayer.push(arguments);}
       gtag('js', new Date());
       gtag('config', 'GTM-PZPSHWWJ');`
-    ]
+    ],
+    [
+      'script',
+    {},
+    'import { inject } from "@vercel/analytics"'
+  ]
   ],
   cleanUrls:true,
   markdown: {
