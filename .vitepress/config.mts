@@ -23,7 +23,7 @@ export default defineConfig({
     ],
     [
       'script',
-    {async:'',src: 'https://cdn.vercel-insights.com/v1/script.debug.js'},
+    {async:'',src: 'https://cdn.jsdelivr.net/npm/@vercel/analytics@1.3.1/+esm'},
   ]
   ],
   cleanUrls:true,
