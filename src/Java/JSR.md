@@ -337,7 +337,10 @@ public class ValidList<E> implements List<E> {
     }
 }
 ```
+## 参考文章
+1. [别再乱用了，这才是 @Validated 和 @Valid 的真正区别和用法！](https://juejin.cn/post/7265615052190564408?searchId=20240621181011622C1E86755A7D979FFC#heading-7)
 
+2. [JSR303数据校验快速入门](https://www.bilibili.com/video/BV1mZ4y197f4/?spm_id_from=333.337.search-card.all.click&vd_source=3c93d521158d3aa4f74c71c5140ba8dc)
 
 
 
