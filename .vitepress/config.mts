@@ -23,7 +23,9 @@ export default defineConfig({
       gtag('config', 'GTM-PZPSHWWJ');`
     ],
     ["script", { src: "/_vercel/insights/script.js", defer: '' }],
-    ["script",{src: "/_vercel/speed-insights/script.js",defer: ''}]
+    ["script",{src: "/_vercel/speed-insights/script.js",defer: ''}],
+    
+    ["script",{src:"https://busuanzi.ibruce.info/busuanzi/2.3/busuanzi.pure.mini.js",defer:''}]
   ],
   cleanUrls:true,
   markdown: {

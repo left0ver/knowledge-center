@@ -12,6 +12,7 @@
   "author": "left0ver",
   "license": "CC BY-NC-SA",
   "devDependencies": {
+    "less": "^4.2.0",
     "vitepress": "^1.2.3"
   },
   "dependencies": {
