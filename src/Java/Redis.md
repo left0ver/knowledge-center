@@ -204,13 +204,13 @@ List的底层是一个双向链表,类似于Java的`LinkedList`，元素可以�
 
 ### 优点
 
-api和redis的命令一致，容易上手，支持 pipelining、事务、LUA Scripting、Redis Sentinel、Redis Cluster等等 redis 提供的高级特性。
+1. api和redis的命令一致，容易上手，
+2. 支持 pipelining、事务、LUA Scripting、Redis Sentinel、Redis Cluster等等 redis 提供的高级特性。
 
 ### 缺点
 
 1. Jedis 在实现上是直接连接的 redis server，如果在多线程环境下是非线程安全的，这个时候可以使用连接池来管理Jedis，来解决多线程环境下线程不安全的问题
-
-2. 不支持异步
+2. 采用了阻塞式IO（不支持异步编程），可能在高负载下出现性能瓶颈。
 
 ## Lettuce
 
