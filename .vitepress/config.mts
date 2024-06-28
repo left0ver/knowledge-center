@@ -10,6 +10,8 @@ export default defineConfig({
   },
   
   head: [
+    // 网站的图标
+    ["link", {rel:"icon" ,href:"/favicon.ico"}],
     [
       'script',
       { async: '', src: 'https://www.googletagmanager.com/gtag/js?id=GTM-PZPSHWWJ' }
@@ -31,7 +33,9 @@ export default defineConfig({
   markdown: {
     lineNumbers: true
   },
+  
   themeConfig: {
+    logo:"/logo.svg",
     nav: [
     ],
     outline:{
@@ -62,6 +66,7 @@ export default defineConfig({
       message: 'Released under the CC BY-NC-SA License.',
       copyright: 'Copyright © 2024-present <a href="https://github.com/left0ver">leftover</a>'
     },
+  
     sidebar: [
       {
         text: 'Java',
