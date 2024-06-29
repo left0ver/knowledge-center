@@ -730,7 +730,7 @@ public class AdminUser extends User {
 
 
 
-## mybatidiscriminators源码解析
+## mybatis 源码解析
 
 1. 首先使用Javassist的`ProxyFactory`类动态生成一个实现了dao层的接口的代理类，对接口上进行劫持
 2. 用户使用返回之后的代理对象调用方法时，mybatis通过配置文件获取到是哪种sql，例如是select语句，还会根据方法的返回值类型判断是 查询一条还是查询多条 ，从而决定调用` sqlSession.selectOne();` 还是`sqlSession.selectList()`方法，然后传入对应的参数，id是`接口名.方法名`, sql的参数会根据你调用方法时传入的参数 再结合 sql语句的对应的#{}里面的做匹配，转化为一个map集合传入（多参数）或者直接传入（单个参数）。
