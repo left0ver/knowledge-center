@@ -85,8 +85,9 @@ export default defineConfig({
           { text: 'JSR', link: 'JSR' },
           {text: 'SQL',link: 'sql'},
           {text: 'Maven', link: 'Maven'},
-          {text: 'Redis', link: 'Redis'},          
-          {text: 'Java面试题', link: 'Java面试题'}          
+          {text: 'Redis', link: 'Redis'},
+          {text: 'Java面试题', link: 'Java面试题'},
+          {text: 'IDEA常用快捷键',link: 'IDEA常用快捷键'}
         ]
       },
     ],
