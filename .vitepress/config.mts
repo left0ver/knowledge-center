@@ -24,9 +24,11 @@ export default defineConfig({
       gtag('js', new Date());
       gtag('config', 'GTM-PZPSHWWJ');`
     ],
+    // vercel访问量的分析
     ["script", { src: "/_vercel/insights/script.js", defer: '' }],
+    // vercel网站速度分析
     ["script",{src: "/_vercel/speed-insights/script.js",defer: ''}],
-    
+    // 不蒜子访问数量统计（页面上显示）
     ["script",{src:"https://busuanzi.ibruce.info/busuanzi/2.3/busuanzi.pure.mini.js",defer:''}]
   ],
   cleanUrls:true,
