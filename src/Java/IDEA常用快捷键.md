@@ -3,7 +3,7 @@
 
 `command + option + <-` 回到光标前面一次的位置
 
-`command + option + ->` 回到关标后一次的位置
+`command + option + ->` 回到光标后一次的位置
 
 `command + shift + u`  将文字转为大写/小写
 
