@@ -10,13 +10,15 @@ brew install redis
 
 
 
-Redis 可视化管理工具
+## Redis 可视化管理工具
+
+[Redis-Insight](https://redis.io/insight/) redis官方的可视化工具
 
 [Another Redis Desktop Manager](https://github.com/qishibo/AnotherRedisDesktopManager/blob/master/README.zh-CN.md)
 
-Mac 上美观度Redis 可视化管理工具
+[medis2](https://getmedis.com/) Mac 上美观度Redis 可视化管理工具
 
-[medis2](https://getmedis.com/)
+
 
 
 
@@ -237,6 +239,35 @@ Redis在的HLL是基于**string结构**实现的，且单个HLL的内存永远 <
    - PFMERGE：合并N个不同的HyperLogLog到一个里面
 
 
+
+## BloomFilter(布隆过滤器)
+
+布隆过滤器是一种专门用来解决去重问题的高级数据结构（用来判断某个数字，字符串是否存在）,由一个大型位数组和几个hash函数组成，会有一点不精确，有误判的概率
+
+### 原理
+
+举个例子：假设这里BloomFilter使用3个hash函数，
+
+存入BloomFilter中：当我们要将5存入BloomFilter中时，会先使用这3个hash函数分别对5进行hash，然后 在数组中的位置=（hash值 % bit数组长度），3个hash函数对应3个位置（假设为5，6，7），分别将这三个位置设置为1。
+
+判断元素是否存在：和上面类似，例如我们判断5是否存在，使用这3个hash函数分别对5进行hash，然后 在数组中的位置=（hash值 % bit数组长度），3个hash函数对应3个位置，若这3个位置的值都为1，则返回true（存在），否则返回false（不存在）
+
+### 特点
+
+1. BloomFilter返回false，则表示该数据一定不存在，BloomFilter返回true，则该数据可能存在，也可能不存在
+2. BloomFilter 只能添加元素，**不能删除元素**
+3. 添加和查询时间复杂度均为O(k)，其中k是哈希函数的数量。
+
+### 使用场景
+
+1. 用来判断某个数据是否存在redis和数据库中，解决缓存穿透问题
+2. 黑名单检验（识别垃圾邮件、判断某个IP是否在黑名单中）
+
+
+
+## CuckooFilter（布谷鸟过滤器）
+
+[布隆过滤器过时了，未来属于布谷鸟过滤器？](https://juejin.cn/post/6844903861749055502)
 
 ## 命令的参考手册
 
@@ -628,10 +659,6 @@ TODO：https://juejin.cn/post/7190400432294854711#heading-8
 1. 互斥锁方案，保证同一时间只有一个业务线程更新缓存，未能获取互斥锁的请求，要么等待锁释放后重新读取缓存，要么就返回空值或者默认值。**（在缓存重建的时候会降低并发量）**
 2. 不给热点数据设置过期时间，由后台异步更新缓存，或者在热点数据准备要过期前，提前通知后台线程更新缓存以及重新设置过期时间；
 
-
-
-
-
 ## Redis实现分布式锁
 
 ### 实现思路
@@ -932,3 +959,873 @@ Timeline模式的实现方案有3种：
 
 可以使用redis 的`ZREVRANGEBYSCORE` 命令实现
 
+
+
+
+
+# Redis持久化
+
+## RDB
+
+1. 什么是RDB？
+
+   RDB全称Redis Database Backup file（Redis数据备份文件），也叫Redis数据快照。简单来说就是把内存中的所有数据都记录到磁盘中，当redis实例故障重启后，会从磁盘中读取快照文件，恢复数据。
+
+2. 执行RDB
+
+   1. `save` 命令，由redis主进程来执行RDB，会阻塞所有命令
+
+   2. `bgsave`命令，开启子进程执行RDB，避免主进程受到影响
+
+   3. 执行shutdown命令时会触发`bgsave`
+
+   4. 主从复制时，从节点要从主节点进行全量复制时也会触发bgsave操作，生成当时的快照发送到从节点；
+
+   5. redis.conf中配置`save m n`，即在m秒内有n次修改时，自动触发bgsave生成rdb文件；
+
+      <img src="https://img.leftover.cn/img-md/202407042313249.png" alt="image-20240704231326148" style="zoom:50%;" />
+
+      <img src="https://img.leftover.cn/img-md/202407042314384.png" alt="image-20240704231438348" style="zoom: 50%;" />
+
+3. bagsave的基本流程？
+
+   - redis客户端执行bgsave命令或者自动触发bgsave命令；
+   - 主进程判断当前是否已经存在正在执行的子进程，如果存在，那么主进程直接返回；
+   - 如果不存在正在执行的子进程，那么就fork一个新的子进程进行持久化数据（这里就是复制一个主进程的页表），fork过程是阻塞的，fork操作完成后主进程即可执行其他操作；
+   - 子进程先将数据写入到临时的rdb文件中，待快照数据写入完成后再原子替换旧的rdb文件；
+   - 同时发送信号给主进程，通知主进程rdb持久化完成，主进程更新相关的统计信息（info Persitence下的rdb_*相关选项）。
+
+   
+
+4. 那么将内存中的数据同步到硬盘的过程可能就会持续比较长的时间，而实际情况是这段时间Redis服务一般都会收到数据写操作请求。**那么如何保证数据一致性呢？**
+
+      - RDB中的核心思路是Copy-on-Write，首先fork一个子进程进行持久化数据的操作（复制主进程的页表），之后当子进程在进行持久化数据时，若主进程需要修改某一块数据，那么这块数据就会被复制一份，生成该数据的副本，然后子进程就将副本数据写入RDB文件中，主进程仍然可以直接修改原数据
+
+   
+
+## AOF
+
+1. 什么是AOF？
+
+   AOF全称`Append Only File`,会记录每次（增删改）的命令到aof文件中,当redis重启时，会读取aof文件中的命令重新执行，防止数据的丢失。
+
+2. Redis7.0之后的变化
+
+   - redis7.0之前是只有一个aof文件的
+
+   - redis7.0之后采用了Multi Part AOF，MP-AOF就是将原来的单个AOF文件拆分成多个AOF文件。在MP-AOF中，我们将AOF分为三种类型，分别为：
+
+     `BASE`：表示基础AOF，它一般由子进程通过重写产生，该文件最多只有一个。
+
+     `INCR`：表示增量AOF，它一般会在AOFRW开始执行时被创建，该文件可能存在多个。
+
+     `HISTORY`：表示历史AOF，它由BASE和INCR AOF变化而来，每次AOFRW成功完成时，本次AOFRW之前对应的BASE和INCR AOF都将变为HISTORY，HISTORY类型的AOF会被Redis自动删除。
+
+     为了管理这些AOF文件，引入了一个`manifest(清单)文件`来跟踪、管理这些AOF。同时，为了便于AOF备份和拷贝，我们将所有的AOF文件和manifest文件放入一个单独的文件目录中，目录名由appenddirname配置(Redis 7.0新增配置项)决定。
+
+3. 开启AOF：
+
+   AOF默认是关闭的，可以通过配置`appendonly yes`开启，通过配置`appendfilename xxxx`设置aof文件名称
+
+4. AOF的命令记录的时机
+
+   ​	默认为`everysec`
+
+   <img src="https://img.leftover.cn/img-md/202407042335974.png" style="zoom:50%;" />
+
+5. AOF重写
+
+   由于AOF记录的是操作的命令，所以AOF文件会比RDB文件大的多，并且AOF会记录同一个key多多次写操作，但只有最后一次写操作才有意义。通过重写，会修改aof文件的内容，用最少的命令达到相同的效果
+
+   手动重写：执行`BGREWRITEAOF`命令
+
+   自动重写：在redis.conf中配置
+
+   ```yml
+   # 重写触发配置
+   # AOF文件比上次重写后的文件 增长超过100%则触发重写
+   auto-aof-rewrite-percentage 100
+   # AOF文件体积超过64mb则触发重写
+   auto-aof-rewrite-min-size 64mb
+   ```
+
+6. 在重写AOF文件时的整个过程
+
+   - Redis7.0之前
+     - fork一个子进程处理重写任务
+     - 子进程开始向一个临时文件中重写AOF
+     - 父进程除了会将写命令写入旧的aof文件中，还会写一份到`aof_rewrite_buf`中进行缓存（因此即使重写失败也没什么损失）
+     - 当子进程完成重写任务，父进程收到一个信号，追加`aof_rewrite_buf`缓冲区的命令到子进程创建的新AOF文件末尾
+     - TODO： 管道技术
+     - 最后修改临时的AOF文件名，此时原来的aof文件会被覆盖
+   - Redis7.0之后
+     - fork一个子进程处理重写任务
+     - 子进程执行重写的逻辑产生一个新的base.aof文件，父进程会开启一个新的incr.aof文件继续写入（重写期间父进程接收到的写命令会保存在这里）。新生成的BASE AOF和新打开的INCR AOF就代表了当前时刻Redis的全部数据
+     - 重写结束之后，主进程会更新manifest文件，将新生成的base aof和incr aof信息加入进去，并将之前的base aof和incr aof标记为history（这些history aof会被redis异步删除）。一旦manifest文件更新完成，表示整个aof重写流程结束
+
+## Reference
+
+[Redis 7.0 Multi Part AOF的设计和实现](https://www.51cto.com/article/701106.html)
+
+## 混合模式
+
+1. 开启混合模式
+
+   ```yml
+   # 必须先开启AOF
+   appendonly yes
+   # 开启混合模式
+   aof‐use‐rdb‐preamble yes
+   ```
+
+2. 混合模式基本原理
+
+   - Redis7.0之前
+
+     - Redis7.0之前只有**一个**aof文件，在混合模式下，这个aof文件的头部为`rdb的数据`(保存的是内存的快照)，尾部为`aof日志`（记录增量的aof写命令）
+
+       <img src="https://img.leftover.cn/img-md/202407051542591.png" alt="image-20240705154215463" style="zoom:33%;" />
+
+     - 混合模式持久化是通过bgrewriteaof命令操作的
+
+       1. fork一个子进程，创建一个临时的aof文件，将当前内存的数据快照写入aof文件的头部（和rdb的原理一样）
+       2. 写入rdb的过程中，若有新的写操作，则将写命令追加到aof文件末尾
+       3. 完成重写之后重命名文件名覆盖之前的aof文件
+
+   - Redis7.0之后
+
+     - 在7.0之后，混合模式下会有`appendonlydir`文件夹，一般包含一个`base.rdb`文件,类似`appendonly.aof.1.base.rdb`；一个/多个`incr.aof`文件，类似`appendonly.aof.4.incr.aof`; 还有一个清单文件`appendonly.aof.manifest`
+     - 和7.0之前类似，也是基于bgrewriteaof命令操作的
+     - fork一个子进程，创建一个新的base.rdb文件，和新的incr.aof文件，将当前的快照信息写入新的base.rdb文件（重写期间父进程接收到的写命令保存到新的incr.aof），新生成的base.rdb和新生成的incr.aof文件就代表了当前时刻Redis的全部数据
+     - 重写结束之后，主进程会更新manifest文件，将新生成的base.rdb和incr.aof的文件信息加入进去，并将旧的base.rdb和incr.aof标记为history（这些history aof会被redis异步删除）。一旦manifest文件更新完成，表示整个aof重写流程结束
+
+3. 混合模式下恢复数据
+
+   先将base.rdb文件中的数据加载到redis，然后再重放incr.aof日志，重启效率大幅得到提升
+
+## 恢复数据的优先级
+
+若开启了AOF，则优先加载AOF文件恢复数据，若没有开启AOF/AOF文件不存在，则加载RDB文件恢复数据。
+
+**原因**：因为AOF保存的数据更完整，AOF基本上最多损失1s的数据。
+
+## RDB和AOF的优缺点
+
+### RDB
+
+   优点：
+
+   1. RDB文件会压缩，文件体积相对AOF文件较小
+   2. Redis加载RDB文件恢复速度要远快于AOF方式
+
+   缺点：
+
+   1. RDB执行间隔长，若期间redis宕机了，则丢失的数据比较多
+   2. 每次调用bgsave的时候都需要fork子进程，频繁执行成本较高
+   3. RDB文件是二进制的，没有可读性，而AOF文件在了解其结构的情况下可以手动修改文件或者补全
+
+   ### AOF
+
+   优点：
+
+     1. 可靠性比较高，最多丢失1s钟的数据
+     1. 系统资源占用比较低，主要是占用io资源，但是AOF重写的时候会占用比较多的cpu和磁盘资源
+
+   缺点：
+
+       1. aof文件会比较写操作的命令，所以文件体积比较大
+       2. 宕机恢复速度比RDB慢
+
+
+
+
+
+# Redis主从
+
+## 概述
+
+⚠️说明： `REPLICAOF`命令和`SLAVEOF`命令一样，`REPLICAOF` 命令是5.0之后的，下面全部使用`REPLICAOF`命令
+
+1. redis的主从结构默认就支持读写分离，即主节点可读可写，从节点只读
+
+2. redis配置主从很简单，使用redis-cli 登录上需要作为salve结点的redis，使用`REPLICAOF`命令来设置这个哪个节点作为当前结点的master（如此时当前结点已经是salve结点，则会修改其master结点）
+
+​	例如`REPLICAOF 172.18.0.4 6379` 
+
+3. `REPLICAOF NO ONE` 命令会停止复制，把结点改为主结点。（可以用于当master挂掉时，使用该命令设置某个从节点设置为master，这时这个master是没有任何salve结点的，需要手动重新配置所有原从节点指向新的主节点）
+
+## docker-compose 搭建redis主从
+
+```yml
+version: '3.8'
+services:
+  redis-master:
+    image: redis:7.2.5
+    container_name: redis-master
+    ports:
+      - "7777:6379"
+    volumes:
+      - redis-master-data:/data
+    command: ["redis-server", "--appendonly", "yes"]
+      
+  redis-slave1:
+    image: redis:7.2.5
+    container_name: redis-slave1
+    ports:
+      - "7778:6379"
+    depends_on:
+      - redis-master
+    volumes:
+      - redis-slave1-data:/data
+    command: ["redis-server", "--appendonly", "yes", "--slaveof", "redis-master", "6379"]
+
+  redis-slave2:
+    image: redis:7.2.5
+    container_name: redis-slave2
+    ports:
+      - "7779:6379"
+    depends_on:
+      - redis-master
+    volumes:
+      - redis-slave2-data:/data
+    command: ["redis-server", "--appendonly", "yes", "--slaveof", "redis-master", "6379"]
+
+volumes:
+  redis-master-data:
+  redis-slave1-data:
+  redis-slave2-data:
+
+```
+
+## 主从同步的原理
+
+### 全量同步
+
+1. salve 节点请求增量同步（发送replId 和offset）（会先尝试增量同步，被拒绝之后才会全量同步）
+2. master节点判断replid是否与自己的一致，发现不一致，拒绝增量同步，返回自己的replId和offset（replId一致表示在同一个数据集中）
+3. master节点执行bgsave，生成RDB，发送RDB到salve节点（master将bgsave期间的命令记录在`replication buffer` ）
+4. salve节点清空本地数据，加载master的RDB文件
+5. master将`replication buffer` 中的命令持续发送给salve，salve执行接收到的命令并执行，保持与master之间的同步
+6. 待同步完毕后，主从之间会保持一个长连接，主节点会通过这个连接将后续的写操作传递给从节点执行，来保证数据的一致。
+
+<img src="https://img.leftover.cn/img-md/202407101341000.png" alt="image-20240710134134832" style="zoom:33%;" />
+
+### 增量同步
+
+
+
+1. 网络断了之后，主从库会采用增量复制的方式继续同步。master节点判断replid和自己的是否一致，发现一致，则根据slave发送过来的offset，且根据 offset 判断数据还在`repl_backlog_buffer`中，则说明可以进行增量同步**（如果根据 offset 判断数据已经被覆盖了，此时只能触发全量同步！）**。于是就去 `repl_backlog_buffer` 查找对应 offset 之后的命令数据，写入到 `replication buffer` 中，最终将其发送给 slave 节点。slave 节点收到指令之后执行对应的命令，一次增量同步的过程就完成了。
+
+<img src="https://img.leftover.cn/img-md/202407101350126.png" alt="image-20240710135012002" style="zoom:33%;" />
+
+### replId和offset的作用
+
+master节点根据salve发送过来的replid和自己的是否一致来判断salve是不是第一次来同步数据，若不一致，则是第一次同步数据；否则则不是第一次同步数据
+
+<img src="https://img.leftover.cn/img-md/202407061232750.png" alt="image-20240706123232716" style="zoom:50%;" />
+
+### replication buffer 和 **repl backlog buffer** 的区别
+
+#### repl_backlog_buffer
+
+​	不管在什么时候 master 都会将写指令操作记录在 `repl_backlog_buffer` 中，因为内存有限， `repl_backlog_buffer` 是一个定长的环形数组，**如果数组内容满了，就会从头开始覆盖前面的内容**，**用于从服务器重新连接时进行增量同步**。
+
+#### replication buffer
+
+因为不同的从节点同步速度不一样，主节点会为每个从节点都创建一个 `replication buffer`，它用于实时传输写命令，且大小是动态的，因为对于同步速度较慢的从服务器，需要更多的内存来缓存数据。
+
+可以通过 `client-output-buffer-limit` 间接控制
+
+`client-output-buffer-limit slave 256mb 64mb 60`
+
+上述配置表示，如果从服务器的输出缓冲区大小超过 256 MB 且在 60 秒内未恢复到 64 MB 以下，Redis 将断开与从服务器的连接。
+
+### 什么时候会做增量同步，什么时候会做全量同步？
+
+1. master判断salve的replId与自己的不一致时，说明salve是第一次做数据同步，此时是**全量同步**
+2. repl_baklog在底层是一个数组，在代码层面实现了循环数组（存数据和取数据时 % 数据长度 即可实现），因此repl_baklog写满之后会覆盖最早的数据。当salve断开太久，导致数据被覆盖了，此时只能做**全量同步**，不能做增量同步。（master的offset-salve的offset > 数据长度 则表示有数据被覆盖了）
+3. 不是第一次同步数据时就是**增量同步**，或者当salve断开的时间不是很久，没有数据被覆盖（master的offset-salve的offset <= 数据长度），则也是**增量同步**
+
+### 主从集群的优化
+
+<img src="https://img.leftover.cn/img-md/202407061245094.png" alt="image-20240706124558032" style="zoom:45%;" />
+
+
+
+# Sentinel（哨兵）
+
+## Sentinel的作用
+
+1. **监控：**Sentinel会不断检查您的master和slave是否按预期工作
+2. **自动故障恢复：**如何master故障，Sentinel会将一个slave提升为master。当原来的master恢复后，会作为新的master的slave
+3. **通知：**Sentinel充当Redis客户端的服务发现来源，当集群发生故障转移时，会将最新信息推送给Redis客户端
+
+<img src="https://img.leftover.cn/img-md/202407062259433.png" alt="image-20240706225912328" style="zoom:60%;" />
+
+## 如何判断一个Redis实例是否健康
+
+- 每隔一秒向Redis实例发送一次ping命令，如果超过一定时间没有响应则认为是主观下线（即该Sentinel认为这个Redis实例下线了）
+- 如果大多数Sentinel（这个数量称为`quorum`,可以配置,建议配置为超过2/N +1）都认为某个Redis实例主观下线，则判定为客观下线（即真的宕机了）
+
+## 选举新的master
+
+发现master故障时，需要在slave中选择一个作为新的master，选择依据是：
+
+- 先判断slave节点与master节点时间长短，如果超过了指定值（down-after-milliseconds *10），则会排除该slave节点
+- 再判断slave节点的slave-priority，越小优先级越高（0则表示永不参与选举）
+- 若slave-priority一样，则判定slave节点的offset值，offset越大说明数据越新（丢失的数据就越小）
+- 若offset一致，则随便选一个slave即可，这里会选择slave 的id更小的作为master
+
+## 故障转移的过程
+
+当选中了其中一个slave作为新的master之后（假设为slave1），故障转移的步骤如下：
+
+- sentinel给slave1节点发送`slave no one `命令，让该节点成为master
+- sentinel给其他的slave发送 `slaveof [host][port]`命令，让这些slave成为新的master的从节点，开始从新master上同步数据。
+- 最后，sentinel将故障节点标记为新的master的slave（修改其配置），当故障节点恢复后会自动成为新的master的slave
+
+## docker-compose 搭建哨兵集群
+
+```yml
+version: '3.8'
+services:
+  redis-master:
+    image: redis:7.2.5
+    container_name: redis-master
+    ports:
+      - "7777:6379"
+    volumes:
+      - redis-master-data:/data
+    command: ["redis-server", "--appendonly", "yes"]
+      
+  redis-slave1:
+    image: redis:7.2.5
+    container_name: redis-slave1
+    ports:
+      - "7778:6379"
+    depends_on:
+      - redis-master
+    volumes:
+      - redis-slave1-data:/data
+    command: ["redis-server", "--appendonly", "yes", "--slaveof", "redis-master", "6379"]
+
+  redis-slave2:
+    image: redis:7.2.5
+    container_name: redis-slave2
+    ports:
+      - "7779:6379"
+    depends_on:
+      - redis-master
+    volumes:
+      - redis-slave2-data:/data
+    command: ["redis-server", "--appendonly", "yes", "--slaveof", "redis-master", "6379"]
+
+
+
+  redis-sentinel1:
+    image: redis:7.2.5
+    depends_on:
+      - redis-master
+      - redis-slave1
+      - redis-slave2
+    container_name: redis-sentinel1
+    volumes:
+      - /Users/leftover/Desktop/redis_test/redis-sentinel.conf:/usr/local/etc/redis/sentinel.conf
+    ports:
+      - "27001:26379"  
+    command: redis-sentinel /usr/local/etc/redis/sentinel.conf  
+  redis-sentinel2:
+    image: redis:7.2.5
+    container_name: redis-sentinel2
+    volumes:
+      - /Users/leftover/Desktop/redis_test/redis-sentinel.conf:/usr/local/etc/redis/sentinel.conf
+    depends_on:
+      - redis-master
+      - redis-slave1
+      - redis-slave2
+    ports:
+      - "27002:26379"
+    command: redis-sentinel /usr/local/etc/redis/sentinel.conf  
+  redis-sentinel3:
+    image: redis:7.2.5
+    container_name: redis-sentinel3
+    volumes:
+      - /Users/leftover/Desktop/redis_test/redis-sentinel.conf:/usr/local/etc/redis/sentinel.conf
+    depends_on:
+      - redis-master
+      - redis-slave1
+      - redis-slave2
+    ports:
+      - "27003:26379"
+    command: redis-sentinel /usr/local/etc/redis/sentinel.conf  
+volumes:
+  redis-master-data:
+  redis-slave1-data:
+  redis-slave2-data:
+```
+
+```yml
+
+#/Users/leftover/Desktop/redis_test/redis-sentinel.conf
+
+
+# bind 127.0.0.1 192.168.1.1
+#
+# protected-mode no
+
+# port <sentinel-port>
+# docker对外开放的端口
+port 26379
+
+# 让服务后台运行(因为使用docker启动时使用了-d参数，所以需要设置为no, 非docker设置为yes)
+daemonize no
+
+# When running daemonized, Redis Sentinel writes a pid file in
+# /var/run/redis-sentinel.pid by default. You can specify a custom pid file
+# location here.
+pidfile /var/run/redis-sentinel.pid
+
+# Specify the log file name. Also the empty string can be used to force
+# Sentinel to log on the standard output. Note that if you use standard
+# output for logging but daemonize, logs will be sent to /dev/null
+logfile ""
+
+# sentinel announce-ip <ip>
+# sentinel announce-port <port>
+# 这两个参数可以强制slave向master声明任意IP和端口对，docker内部网络与外部不同
+# 基于docker所构建的redis集群在docker容器内是能够访问的，但是在容器外或者两个无关联的容器间，是无法访问的
+# 使用这两个参数后，从节点发送给主节点的ip和端口信息就是在这里设定好了。
+# sentinel announce-ip 1.2.3.4
+
+# dir <working-directory>
+# Every long running process should have a well-defined working directory.
+# For Redis Sentinel to chdir to /tmp at startup is the simplest thing
+# for the process to don't interfere with administrative tasks such as
+# unmounting filesystems.
+dir /tmp
+
+sentinel resolve-hostnames yes
+# 这里配置的是监控的redis的地址，mymaster为默认的主节点名字，后面的2为客观掉线的票数，一般为集群数除二
+sentinel monitor mymaster redis-master 6379 2
+
+# sentinel auth-pass <master-name> <password>
+# sentinel auth-pass mymaster MySUPER--secret-0123passw0rd
+
+# sentinel down-after-milliseconds <master-name> <milliseconds>
+# Default is 30 seconds.
+# 超过5秒master还没有连接上，则认为master已经停止，5000ms，默认30秒
+sentinel down-after-milliseconds mymaster 5000
+
+# aclfile /etc/redis/sentinel-users.acl
+
+# requirepass <password>
+
+# sentinel parallel-syncs <master-name> <numreplicas>
+#
+# How many replicas we can reconfigure to point to the new replica simultaneously
+# during the failover. Use a low number if you use the replicas to serve query
+# to avoid that all the replicas will be unreachable at about the same
+# time while performing the synchronization with the master.
+sentinel parallel-syncs mymaster 1
+
+# sentinel failover-timeout <master-name> <milliseconds>
+# 故障转移超时时间 默认3分钟
+# Default is 3 minutes.
+sentinel failover-timeout mymaster 180000
+
+
+```
+
+# 分片集群
+
+## 概述
+
+<img src="https://img.leftover.cn/img-md/202407101413702.png" alt="image-20240710141328657" style="zoom:40%;" />
+
+## 本地搭建分片集群
+
+1. 创建每个redis实例对应的配置文件redis-cluster-[num].conf(一个redis实例对应一个配置文件)
+
+   ```yml
+   port 6001
+   # 开启集群功能
+   cluster-enabled yes
+   # 集群的配置文件名称，不需要我们创建，由redis自己维护（自行修改）
+   cluster-config-file /tmp/6001/nodes.conf
+   # 节点心跳失败的超时时间
+   cluster-node-timeout 5000
+   # 持久化文件存放目录（自行修改）
+   dir /tmp/6001
+   # 绑定地址
+   bind 0.0.0.0
+   # 让redis后台运行
+   daemonize no
+   # 保护模式
+   protected-mode no
+   # 数据库数量
+   databases 1
+   # 日志 （自行修改）
+   logfile /tmp/6001/run.log
+   
+   ```
+
+2. 创建每个redis实例对应的数据的存放文件夹 `cd /tmp  &&  mkdir 6001 6002 6003 6004 6005 6006 `
+
+3. 启动这6个redis实例， `redis-server [配置文件的路径]`
+
+2. 之后运行下面的命令创建集群
+
+```shell
+redis-cli --cluster create --cluster-replicas 1 127.0.0.1:6001 127.0.0.1:6002 127.0.0.1:6003 127.0.0.1:6004 127.0.0.1:6005 127.0.0.1:6006
+```
+
+- redis-cli –cluster 代表集群操作命令 ，create 代表创建集群
+- --cluster-replicas 是指每个master有多少个slave节点
+- 这里前三个会成为master，后三个为slave
+
+3. 再执行`redis-cli -p 6002 cluster nodes` 查看集群状态
+
+总结：先把所有的redis实例启动起来，需要设置`--cluster-enabled` 为`yes`,之后连接上一个集群，执行集群创建的命令即可
+
+## 散列插槽
+
+<img src="https://img.leftover.cn/img-md/202407101447965.png" alt="image-20240710144721893" style="zoom:50%;" />
+
+- 如何将同一类数据固定地保存在同一个redis实例？
+
+  这一类数据使用相同的有效部分，例如key都以{typeId}为前缀
+
+## 集群伸缩
+
+### 新增节点 以及重新分配插槽
+
+1. 起一个新的redis实例，`127.0.0.1:6007`
+2. 将新的redis实例添加到集群中`redis-cli --cluster add-node 127.0.0.1:6007 127.0.0.1:6001`(随便填写集群中的一个实例即可)（默认为master），可以使用` --cluster-slave  --cluster-master-id <arg>` 设置为slave，并且指定master
+3. 重新分配插槽到新的节点,`redis-cli --cluster reshard 127.0.0.1:6001`(填写集群中的一个redis实例的ip:port 即可，按提示操作)
+
+### 删除节点
+
+1. 删除节点之前需要把该节点上的插槽转移到别的节点上
+2. 再删除节点，`redis-cli --cluster del-node 127.0.0.1:6007 node_id`
+
+
+
+## 故障转移
+
+1. 集群模式下默认支持故障转移，即当master宕机时，会选择一个slave作为新的master
+
+2. 执行`cluster failover`命令可以让当前节点成为master，原来的master成为slave（手动故障转移）
+
+3. `cluster failover`也可以用来做**无感知的**数据迁移（非常快就可以完成切换）,即让新redis实例成为被迁移对象slave，然后登录新的redis实例，执行`cluster failover`命令，这时候新的redis成为了master，原来的redis则成为了slave
+
+   <img src="https://img.leftover.cn/img-md/202407111958448.png" alt="image-20240711195822345" style="zoom:65%;" />
+
+
+
+## Java使用分片集群
+
+1. 配置集群的ip，port
+
+```yml
+server:
+  port: 8081
+spring:
+  data:
+    redis:
+      cluster:
+        nodes:
+          - 127.0.0.1:6001
+          - 127.0.0.1:6002
+          - 127.0.0.1:6003
+          - 127.0.0.1:6004
+          - 127.0.0.1:6005
+          - 127.0.0.1:6006
+```
+
+代码中就和没使用分片集群一样，不需要变，需要**注意分片集群的多键操作问题**
+
+## 分片集群的缺点
+
+分片集群上不允许执行多键操作，因为不同的key会可能会放到不同的插槽中，当涉及到mset，pipeline，transactions ，lua script 等多键操作时，以下是两种解决方法
+
+   1. 不能使用多键操作、事务或涉及多个键的 Lua 脚本。键的访问是独立的（即使通过事务或 Lua 脚本将关于同一键的多个命令组合在一起进行访问）。
+   2. 可以使用具有相同 **哈希标记**的键来使用涉及多个键的多键操作、事务或 Lua 脚本，这意味着一起使用的键都具有 `{...}` 恰好相同的子字符串。例如，以下多键操作是在同一个哈希标记的上下文中定义的： `SUNION {user:1000}.foo {user:1000}.bar`，这时候就会被重定向到一个redis中
+
+# 多级缓存
+
+## 概述
+
+<img src="https://img.leftover.cn/img-md/202407111617233.png" alt="image-20240711161750092" style="zoom:33%;" />
+
+## 分布式缓存和进程缓存的区别
+
+<img src="https://img.leftover.cn/img-md/202407100137758.png" style="zoom:40%;" />
+
+## 进程缓存
+
+在jvm内部做的缓存，即使用代码编写缓存，这里可以采用[caffeine](https://github.com/ben-manes/caffeine)工具来构建缓存，即在查询数据库时，会先判断是否存在缓存，不存在则查询数据库，再把数据写入缓存，存在则直接返回缓存数据
+
+
+
+## Nginx本地缓存
+
+使用(openresty)[https://openresty.org/cn/]实现
+
+
+
+## canal
+
+
+
+
+
+#  Bigkey 问题
+
+## 优雅地设置key结构
+
+- 遵循基本的格式：[业务名称]:[数据名]:[id]
+- 长度不超过44B
+- 不包含特殊字符，防止出现意外
+
+**这样做的优点：**
+
+- 可读性强
+- 避免key的冲突
+- 更节省内存：key是string类型，底层编码包含int、embstr和row三种。在全是数字的情况下会采用int存储；embstr在小于44B时使用，采用连续内存空间，内存占用更小；raw在大于44B时使用
+
+
+
+## 什么是BigKey
+
+<img src="https://img.leftover.cn/img-md/202407120047866.png" alt="image-20240712004748709" style="zoom:60%;" />
+
+
+
+## BigKey的危害
+
+<img src="https://img.leftover.cn/img-md/202407120048799.png" alt="image-20240712004835722" style="zoom:50%;" />
+
+## 如何发现BigKey
+
+1. redis-cli –bigkeys
+
+   利用redis-cli 提供的–bigkeys参数，可以遍历分析所有key，并返回key的整体统计信息与每种数据类型的top1的bigkey
+
+   **缺点：**只能返回每种数据类型top1的bigkey，且只有内存信息，没有长度信息
+
+2. scan扫描
+
+   自己编程，利用scan命令扫描redis中的所有key，利用strlen，hlen等命令分析key的长度（不建议使用memory usage，由于redis为单线程，此命令比较耗时，在key比较多的时候尽量不使用memory usage）
+
+3. 利用第三方分析rdb的工具（由于分析的是rdb，因此不会影响redis的运行，but数据不是最新的，不过也能接受），例如[redis-rdb-tools](https://github.com/sripathikrishnan/redis-rdb-tools)（很久没维护了，不推荐），[redis-rdb-cli](https://github.com/leonchen83/redis-rdb-cli)(推荐)（我这里使用的redis为7.2.5，jdk是11，redis-rdb-cli的版本为0.9.5）（这里版本的问题比较大，redis、jdk、redis-rdb-cli的版本都很关键）
+
+   ```shell
+   # 找到前50的key，并输出到对应的文件中
+   cd xxx/redis-rdb-cli/bin
+   ./rct -f mem -s /opt/homebrew/var/db/redis-stack/dump.rdb  -o /Users/leftover/Desktop/dump.mem -l 50
+   
+   ## 输出结果类似这样子（个人觉得还是比较不错的，内存和长度都展示出来了）
+   database,type,key,size_in_bytes,encoding,num_elements,len_largest_element,expiry
+   0,string,"shop:item:10001","512 B",string,1,"440 B",""
+   0,string,"age","48 B",string,1,"8 B",""
+   0,string,"shop:stock:10002","112 B",string,1,"39 B",""
+   0,string,"shop:item:10002","512 B",string,1,"407 B",""
+   0,string,"shop:stock:10004","112 B",string,1,"37 B",""
+   0,string,"shop:stock:10005","112 B",string,1,"39 B",""
+   0,string,"shop:item:10004","576 B",string,1,"470 B",""
+   0,string,"name","104 B",string,1,"45 B",""
+   0,string,"shop:stock:10003","112 B",string,1,"37 B",""
+   ```
+
+4. 如果你使用了云服务的redis，则他们自带bigkey的分析的服务，可以很直观的看到key的内存占用以及长度
+
+5. 使用redis官方的[redis-insight](https://redis.io/insight/),可以下载redis-stack（自带redis-insight），也可以单独下载redis-insight
+
+   <img src="https://img.leftover.cn/img-md/202407120106833.png" alt="image-20240712010657721" style="zoom: 67%;" />
+
+## 如何解决BigKey
+
+1. 删除BigKey
+
+- Redis 4.0及之后版本：您可以通过**UNLINK**命令安全地删除大Key甚至特大Key，该命令能够以非阻塞的方式，逐步地清理传入的Key。
+- Redis 4.0之前的版本：建议先通过**SCAN**命令读取部分数据，然后进行删除，避免一次性删除大量key导致Redis阻塞。
+
+2. 将一个Big Key拆分为多个key-value这样的小Key，并确保每个key的成员数量或者大小在合理范围内，然后再进行存储，通过get不同的key或者使用mget批量获取。
+
+    <img src="https://img.leftover.cn/img-md/202407120128210.png" alt="image-20240712012827160" style="zoom: 60%;" />
+
+   <img src="https://img.leftover.cn/img-md/202407120129956.png" alt="image-20240712012926864" style="zoom: 50%;" />
+
+3. 使用监控工具及时发现大Key，并设置告警通知。
+
+4. 在存入redis之前对数据进行压缩，取数据时解压缩（压缩和解压缩需要时间，耗费cpu）
+
+# Pipeline
+
+## 为什么使用Pipeline？
+
+当我们要执行大量的命令时，如果一条一条地向redis发送命令执行，这时候整体的执行时间**约等于 网络传输的时间**（redis执行命令特别快，网络传输的时间远大于redis执行命令的时间），这时候就可以一次性发送多条命令给redis（只需网络传输一次），这时候执行的时间就大大的缩短了。
+
+>也不要一次性发太多的命令，否则会占满带宽，导致网络拥堵
+
+## MSET，HSET,SADD,ZADD,LPUSH 等命令和pipeline的区别
+
+1. HSET,SADD,ZADD,LPUSH 都只能向同一个key 中添加元素
+
+2.  MSET，HSET,SADD,ZADD,LPUSH  命令是原子性的，redis执行的一次性添加多个元素的
+
+3. pipeline则更灵活，可以执行不同的命令，向不同的key添加元素，但是pipeline多个命令之间不具备原子性
+
+## 集群下的批处理
+
+<img src="https://img.leftover.cn/img-md/202407121930730.png" alt="image-20240712193024632" style="zoom:40%;" />
+
+   这里说一下图片中的第三种：`并行slot`，即将先在代码中计算出key对应的插槽，把相同插槽的key-value放一起执行。因为会分成很多组，**这里可以开启多个线程向redis发送多个mset命令或者pipeline**，这样就可以达到并行执行各组命令的效果了.因此因此总耗时约为1次网络传输的时间+N次执行命令的时间
+
+spring-data-redis的 `multiSet` 方法就是采用的这种实现
+
+## spring-redis-data 中使用pipeline
+
+[Spring boot 下使用Redis管道（pipeline）进行批量操作](https://juejin.cn/post/7232225892214636581#heading-4)
+
+```java
+//        stringRedisTemplate.executePipelined((RedisCallback<Object>) connection -> {
+//            for (int i = 0; i < 100000; i++) {
+//
+//                connection.set(("user:key" + i).getBytes(StandardCharsets.UTF_8), "zwc".getBytes());
+//            }
+//            System.out.println(111);
+//            return null;
+//        });
+
+        stringRedisTemplate.executePipelined(new SessionCallback<Object>() {
+            @Override
+            public Object execute(RedisOperations operations) throws DataAccessException {
+                for (int i = 0; i < 100000; i++) {
+                    operations.opsForValue().set("user:" + i, "zwc");
+                }
+                return null;
+            }
+        });
+```
+
+
+
+
+
+# Redis服务端优化
+
+## 持久化优化
+
+<img src="https://img.leftover.cn/img-md/202407132350260.png" alt="image-20240713235050143" style="zoom:50%;" />
+
+## 慢查询优化
+
+在Redis执行时耗时超过某个阈值的命令，称为慢查询
+
+`slowlog-log-slower-than`: 慢查询阈值，单位us，默认10000，**建议1000**，因为Redis非常快，一般一条命令50us左右就可以执行完
+
+`slowlog-max-len`:设置慢查询日志（本质上是一个队列）的长度。默认是128
+
+<img src="https://img.leftover.cn/img-md/202407140005261.png" alt="image-20240714000525212" style="zoom: 50%;" />
+
+<img src="https://img.leftover.cn/img-md/202407140005233.png" alt="image-20240714000531179" style="zoom:50%;" />
+
+也可以使用`Redis-Insight`来查看慢查询的日志
+
+<img src="https://img.leftover.cn/img-md/202407140008361.png" alt="image-20240714000806302" style="zoom: 25%;" />
+
+## 命令与安全
+
+<img src="https://img.leftover.cn/img-md/202407140012598.png" alt="image-20240714001236558" style="zoom:33%;" />
+
+## 内存安全和配置
+
+<img src="https://img.leftover.cn/img-md/202407140014621.png" alt="image-20240714001406563" style="zoom:50%;" />
+
+查看Redis目前的内存分配状态
+
+- info memory
+
+- memory xxx(使用help memory来查看帮助)
+
+<img src="https://img.leftover.cn/img-md/202407140014266.png" alt="image-20240714001432194" style="zoom:50%;" />
+
+
+
+## 选择分片集群还是主从
+
+### 集群的问题
+
+1. 集群完整性问题
+
+   在Redis的默认配置中，如果发现任意一个插槽不可用，则整个集群都会对外停止服务。
+
+   举个例子：假设我们部署了一个集群6个节点，3主3从，插槽是分配在这三个主节点上，当一个master以及它的从节点都挂了（由于从节点也挂了，所以不能故障转移了），这时候这个master上的插槽就不能用了，因此整个集群都会停止服务（即使其他master没宕机），这样子的话我们整个业务都崩掉了
+
+   我们可以通过修改`cluster-require-full-coverage`为no(默认yes) ，来改变这个行为（即就算有插槽不能用了，也继续对外提供服务）。当然这样做有一个缺点，当我们代码中的有些key映射到了这些不可用的插槽上时，会报错。不过这样子至少可以保证部分服务可用
+
+2. 集群带宽问题
+
+   <img src="https://img.leftover.cn/img-md/202407140002336.png" alt="image-20240714000250293" style="zoom:50%;" />
+
+3. 客户端性能问题
+
+   由于用了集群，需要对key进行hash，重定向等操作，性能会低一点
+
+4. lua脚本，事务，pipeline等多键操作的问题
+
+### 建议
+
+单体Redis（主从Redis）已经能达到**万级别的QPS**，并且也具备很强的高可用性。**因此如果主从能满足业务需求的情况下，尽量不搭建Redis集群**
+
+# Redis数据结构原理
+
+## 简单动态字符串（Simple Dynamic String）SDS
+
+1. 
+
+<img src="https://img.leftover.cn/img-md/202407140150955.png" alt="image-20240714015040892" style="zoom:50%;" />
+
+SDS是一个结构体：
+
+<img src="https://img.leftover.cn/img-md/202407140151190.png" alt="image-20240714015132144" style="zoom:50%;" />
+
+- len：字符串数组的长度（单位Byte）
+
+- alloc： 当前字符串总共申请的字节数（因为有SDS中有一个**内存预分配的策略**，因此申请字节数长度会比真正需要的字节数大）
+
+- flags：标记不同SDS的头类型，用来控制SDS头大小（为了节省空间，redis会根据字符串的长度不同，会采用不同类型的SDS）
+
+  以下是其中一些：支持字符串长度为2^5（已弃用）（flag=0）， 字符串长度为2^8 （flag=1）, 字符串长度为2^16 （flag=2）， 字符串长度为2^32 （flag=3）, 字符串长度为2^64（flag=4） 来适应存储的长度的字符串
+
+  <img src="https://img.leftover.cn/img-md/202407140157742.png" alt="image-20240714015747698" style="zoom: 50%;" />
+
+  
+
+2. 内存预分配
+
+   <img src="https://img.leftover.cn/img-md/202407140206032.png" alt="image-20240714020609990" style="zoom:50%;" />
+
+      为什么是二进制安全呢？c语言中默认字符串结束的标识是`\0`,因此如果采用c语言中的这中方式，那我们就不能存储`\0`，所以c语言中的字符串是非二进制安全的；而Redis是根据结构体中len字段来获取字符串的内容的，不是根据`\0`来判断字符串的结束，所以是二进制安全的（可以存储`\0`）
+
+   对于二进制安全，可以阅读[什么，你还不懂Redis二进制安全吗？](https://blog.csdn.net/qq_33589510/article/details/108333138)	
+
+## IntSet
+
+1. IntSet是Redis中set集合的一种实现方式，基于整数数组来实现，并且具备`长度可变`，`元素唯一`,`有序`等特征。
+
+   具备类型升级机制，可以节省内存空间(根据数组中最大的元素的大小来决定使用哪种encoding)
+
+   底层采用的是**二分查找的方式来查询元素是否存在以及元素应该插入的位置**
+
+<img src="https://img.leftover.cn/img-md/202407140138377.png" alt="image-20240714013844212" style="zoom:50%;" />
+
+- encoding : 数组的编码方式，即每个元素占多少个Byte，有三种：16位（2B），32位（4B），64位（8B）
+- length：数组的长度
+- contents 是真正存储元素的地方，`int8_t contents[]`并不代表数组的每个元素占1B，数组元素的真正大小由encoding来维护
+
+2. IntSet的类型升级
+    <img src="https://img.leftover.cn/img-md/202407140146657.png" alt="image-20240714014617563" style="zoom: 50%;" />
+
+​	说明：只有当新添加的元素 > 数组中的所有元素 或者 当新添加的元素 < 数组中的所有元素 时，才可能触发IntSet升级，**由于元素可能为负数，所以新元素可能添加到数组开头或者末尾**
