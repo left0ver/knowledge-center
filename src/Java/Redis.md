@@ -1829,3 +1829,292 @@ SDS是一个结构体：
     <img src="https://img.leftover.cn/img-md/202407140146657.png" alt="image-20240714014617563" style="zoom: 50%;" />
 
 ​	说明：只有当新添加的元素 > 数组中的所有元素 或者 当新添加的元素 < 数组中的所有元素 时，才可能触发IntSet升级，**由于元素可能为负数，所以新元素可能添加到数组开头或者末尾**
+
+## Dict
+
+1. Dict由三部分组成：哈希表（DictHashTable）、哈希节点（DictEntry）、字典（Dict）
+
+   DictHashTable的数据结构：
+
+   <img src="https://img.leftover.cn/img-md/202407142348654.png" alt="image-20240714234827525" style="zoom:50%;" />
+
+   - size: 哈希表的大小（即数组长度，总是为2^n）
+
+   - sizemask：哈希表大小的掩码（size-1）
+
+     和jdk的hashMap类似，要储存的数组的位置 = 将要储存的字段进行hash得到的结果 & sizemask，因此size必须为2^n
+
+   - used: entry的个数(entry的个数和ht的长度无关，使用的是拉链法解决冲突，因此used可能 > size )
+
+     DictEntry的数据结构：
+
+
+   <img src="https://img.leftover.cn/img-md/202407142354390.png" alt="image-20240714235402316" style="zoom:50%;" />
+
+   - v： 表示value，使用的是union类型（即value的类型可以是[ `指针`、`无符号64位整数`、`有符号64位整数`、`double类型`]中的任意一个）
+
+   - next：使用拉链法解决冲突，next指向下一个具有相同hash bucket 的entry
+
+     Dict的数据结构
+
+   <img src="https://img.leftover.cn/img-md/202407150005619.png" alt="image-20240715000542535" style="zoom: 67%;" />
+
+   
+
+   整个的结构：
+   	<img src="https://img.leftover.cn/img-md/202407150008674.png" alt="image-20240715000833614" style="zoom:50%;" />
+
+2. Dict的扩容
+
+   <img src="https://img.leftover.cn/img-md/202407150009317.png" alt="image-20240715000956260" style="zoom:50%;" />
+
+3. Dict的收缩
+
+   <img src="https://img.leftover.cn/img-md/202407150023898.png" alt="image-20240715002310834" style="zoom: 50%;" />
+
+4. Dict的渐进式rehash
+
+   <img src="https://img.leftover.cn/img-md/202407150024947.png" alt="image-20240715002436882" style="zoom:50%;" />
+
+   <img src="https://img.leftover.cn/img-md/202407150025531.png" alt="image-20240715002504460" style="zoom:50%;" />
+
+## ZipList
+
+1. ZipList是一种特殊的“双端链表”，由一系列特殊编码的连续内存块组成。可以在任意一端进行压入/弹出操作，时间复杂度位O（1），**由于ziplist的内存是连续的，因此ziplist的元素个数不能太多，否则不好申请大片连续的内存空间**
+
+<img src="https://img.leftover.cn/img-md/202407150032011.png" alt="image-20240715003223943" style="zoom:50%;" />
+<img src="https://img.leftover.cn/img-md/202407150034995.png" alt="image-20240715003418891" style="zoom:50%;" />
+
+2. ZipListEntry
+
+   <img src="https://img.leftover.cn/img-md/202407150036436.png" alt="image-20240715003629393" style="zoom:50%;" />
+
+   entry中存储的是string
+
+   <img src="https://img.leftover.cn/img-md/202407150038656.png" alt="image-20240715003825601" style="zoom:50%;" />
+
+   entry中存储的是整数
+
+   <img src="https://img.leftover.cn/img-md/202407150041235.png" alt="image-20240715004148179" style="zoom:50%;" />
+
+   > 说明：当我们存储的数字为0～12时，这时候会把真正的内容存储在encoding中，content字段中就不会存储内容了，这样节省了内存空间
+   >
+   > 就是上图的最后一种情况，由于encoding以1111开头的编码已经占用了2个，因此我们只能用0001 - 1101区间来存储0-12（即0对应0001，减1之后就是实际值）
+
+   
+
+3. ZipList的特征：
+
+   - ziplist可以看作是一种连续内存空间的“双向链表”
+   - 列表的节点不是通过指针连接，而是记录上一节点和本节点的长度来寻址，内存占用低
+   - 如果链表数据过多，会占用大片的连续内存空间，若查询链表中间的元素，需要耗费比较多的时间
+   - 增加/删除较大数据时，可能发生连锁更新问题
+
+4. ZipList的连锁更新问题
+
+   虽然概率比较小，但是还是可能会发生
+
+<img src="https://img.leftover.cn/img-md/202407150052563.png" alt="image-20240715005251509" style="zoom:50%;" />
+
+
+
+
+
+## QuickList
+
+1. ZipList虽然节省内存，但是必须申请连续的内存空间，因此不能存储大量的元素，而且ZipList有连锁更新的问题，影响性能。而QuickList就是解决这些问题而提出的一种新的数据结构
+
+   它是一个双端链表，不过链表的每一个节点都是一个ZipList，因此QuickList可以存储大量的元素，虽然每个节点是ZipList，也会有连锁更新问题，但是由于其元素较少，因此性能影响小。
+
+2. 压缩首尾节点  
+
+     配置`list-compress-depth`来设置（默认为0，不压缩）
+
+     <img src="https://img.leftover.cn/img-md/202407152301570.png" alt="image-20240715230122478" style="zoom:50%;" />
+
+3. 控制每个ZipList的大小
+
+     使用`list-max-ziplist-size`（默认值为-2）来限制ziplist的大小
+
+     <img src="https://img.leftover.cn/img-md/202407152304313.png" alt="image-20240715230441244" style="zoom:50%;" />
+
+4. QuickList和quickListNode的结构体
+    <img src="https://img.leftover.cn/img-md/202407152306040.png" alt="image-20240715230614008" style="zoom:50%;" />
+
+5. QuickList的特点
+
+    - quickList是一个节点为ZipList的双端链表
+    - 节点采用ZipList，解决了传统链表内存占用比较大的问题
+    - 控制了ZipList的大小，解决连续内存空间申请效率的问题
+    - 中间节点可以压缩，进一步节省了内存
+
+## SkipList
+
+1. SkipList首先是双向链表，与传统链表的差异：
+
+   - 元素按score升序排序
+
+   - 即一个节点可能包含多个指针（正向指针），指针跨度不同
+
+     <img src="https://img.leftover.cn/img-md/202407152313852.png" alt="image-20240715231329789" style="zoom:50%;" />
+
+2. 特点
+
+<img src="https://img.leftover.cn/img-md/202407152315791.png" alt="image-20240715231501721" style="zoom:50%;" />
+
+3. skiplist的结构体
+
+   ```c
+   // 跳表node
+   typedef struct zskiplistNode {
+       sds ele;
+       double score;
+     // 指向后一个元素
+       struct zskiplistNode *backward;
+     // 指向前面的元素，根据跨度的不同，指向的元素不同
+       struct zskiplistLevel {
+           struct zskiplistNode *forward;
+           unsigned long span;
+       } level[];
+   } zskiplistNode;
+   
+   // 跳表
+   typedef struct zskiplist {
+       struct zskiplistNode *header, *tail;
+       unsigned long length;
+       int level;
+   } zskiplist;
+   ```
+
+   
+
+## RedisObject
+
+<img src="https://img.leftover.cn/img-md/202407152323755.png" alt="image-20240715232307686" style="zoom: 50%;" />
+
+- type: 表示对象的类型（string，list，set，zset，hash），占4bit
+- encoding：表示底层编码方式（例如skiplist,ziplist,ht,int,row,embstr…）,占4bit。  **7.0之后新增了listpack**
+
+<img src="https://img.leftover.cn/img-md/202407152325806.png" alt="image-20240715232509734" style="zoom:50%;" />
+
+# Redis5种数据结构
+
+## string
+
+## list
+
+## hash
+
+
+
+## set
+
+## zset
+
+# Redis过期Key的处理
+
+1. Redis数据库的结构
+
+```c
+typedef struct redisDb {
+  // 储存所有的key，value
+    dict *dict;                 /* The keyspace for this DB */
+  // 只存储设置了过期时间的key，value，用来判断时间是否过期（dict中也会存储一份）
+    dict *expires;              /* Timeout of keys with a timeout set */
+    dict *blocking_keys;        /* Keys with clients waiting for data (BLPOP)*/
+    dict *ready_keys;           /* Blocked keys that received a PUSH */
+    dict *watched_keys;         /* WATCHED keys for MULTI/EXEC CAS */
+  // 数据库id -- db0 
+    int id;                     /* Database ID */
+    long long avg_ttl;          /* Average TTL, just for stats */
+    unsigned long expires_cursor; /* Cursor of the active expire cycle. */
+    list *defrag_later;         /* List of key names to attempt to defrag one by one, gradually. */
+} redisDb;
+```
+
+
+
+2. Redis中TTL记录方式：
+
+   通过`expires` dict来记录每个key的过期时间，dict的 value就是过期的时间戳（ms）
+
+3. 判断时间过期：通过当前时间的时间戳和对应过期时间的时间戳比较即可
+
+4. 过期key的删除策略：
+
+   - 惰性删除：每次查找key时判断是否过期，若过期则删除该key
+   - 定期清理：定期抽样部分key（20个），判断是否过期，过期则删除
+
+## 惰性删除
+
+并不是在TTL到期后就立即删除，而是在访问一个key的时候，判断是否过期，如果过期了，则删除
+
+<img src="https://img.leftover.cn/img-md/202407160051857.png" alt="image-20240716005104731" style="zoom:50%;" />
+
+## 周期删除
+
+由于惰性删除是在访问key的时候删除，所以如果Redis中很多key过期了，但是之后也没有访问，这时候它就会一直保留在Redis中，浪费内存空间，因此引入了周期删除。实际中是二者结合起来一起使用
+
+<img src="https://img.leftover.cn/img-md/202407160106878.png" alt="image-20240716010605794" style="zoom:60%;" />
+
+<img src="https://img.leftover.cn/img-md/202407160104266.png" alt="image-20240716010446179" style="zoom:50%;" />
+
+# Redis内存淘汰策略
+
+## Redis的8种内存淘汰策略
+
+<img src="https://img.leftover.cn/img-md/202407160201780.png" alt="image-20240716020153635" style="zoom:67%;" />
+
+```c
+typedef struct redisObject {
+    unsigned type:4;
+    unsigned encoding:4;
+    unsigned lru:LRU_BITS; /* LRU time (relative to global lru_clock) or
+                            * LFU data (least significant 8 bits frequency
+                            * and most significant 16 bits access time). */
+    int refcount;
+    void *ptr;
+} robj;
+
+```
+
+`  unsigned lru:LRU_BITS ` 字段（24bit）就是做内存淘汰的；
+
+- LRU：则保存最近一次访问的时间戳（s）
+- LFU：高16位记录最近一次访问的时间戳（min），低8位记录**逻辑访问次数**，
+
+<img src="https://img.leftover.cn/img-md/202407160207212.png" alt="image-20240716020701089" style="zoom:67%;" />
+
+因此，通过这个算法，即保证了hotkey不容易被删除，也具有良好的时间局部性
+
+## LRU的内存淘汰策略
+
+LRU采用的是近似LRU的算法，跟常规的LRU算法还不太一样。他会准备一个准备淘汰的key的pool(大小为16)，可以看作池中的数据根据访问时间排序（其实不是），访问时间小的优先淘汰。
+
+每次会**依次**随机选取5个key（`maxmemory_samples`配置，默认为5），看pool是否满了，
+
+​	满了，则判断当前的数据访问的时间是否比pool中最大的时间更小，
+
+​			若是，移除pool中最大访问时间的key，将新的key添加进来
+
+​			若不是，则不添加进pool
+
+​	没满，直接放入pool
+
+内存淘汰的时候将pool中访问时间最小的key淘汰（将其删除）
+
+## LFU内存淘汰策略
+
+LFU的内存淘汰策略和LRU类似，同样也是通过取样+evict_pool的方式，只不过LRU是最近的访问根据时间来判断淘汰哪个key，而LFU则根据`lru`字段的低8位的逻辑访问次数来判断淘汰哪个key。（逻辑访问次数的计算参考上面的图片）
+
+>这里是为了理解，说的是通过`逻辑访问次数`、`lru最近访问时间`来比较，其实最终都是转化为了idle来比较。
+>
+>LFU策略的idle=255-lfu逻辑访问次数
+>
+>LRU策略的idle=now-lru（当前时间戳-lru的时间戳）
+>
+>TTL策略的idle=maxTTL-TTL（maxTTL为long的最大值）
+
+## 淘汰策略的整个流程
+
+<img src="https://img.leftover.cn/img-md/202407160250842.png" alt="image-20240716025013753" style="zoom:50%;" />
