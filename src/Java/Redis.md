@@ -1652,13 +1652,68 @@ spring:
 
 2. 将一个Big Key拆分为多个key-value这样的小Key，并确保每个key的成员数量或者大小在合理范围内，然后再进行存储，通过get不同的key或者使用mget批量获取。
 
-    <img src="https://img.leftover.cn/img-md/202407120128210.png" alt="image-20240712012827160" style="zoom: 60%;" />
+   <img src="https://img.leftover.cn/img-md/202407120128210.png" alt="image-20240712012827160" style="zoom: 60%;" />
 
    <img src="https://img.leftover.cn/img-md/202407120129956.png" alt="image-20240712012926864" style="zoom: 50%;" />
 
 3. 使用监控工具及时发现大Key，并设置告警通知。
 
 4. 在存入redis之前对数据进行压缩，取数据时解压缩（压缩和解压缩需要时间，耗费cpu）
+
+# Transaction （事务）
+
+## 事务相关的命令
+
+- multi：开启一个事务
+- exec：执行事务中的命令
+- discard：取消事务，放弃事务中的所有命令
+- watch：监控一个/多个key，如果事务执行前，这些key被其他命令更改过，那么事务将终止（exec会返回nil，表示事务被打断了）
+- unwatch：取消对所有key的监控（**在exec调用时或者客户端断开连接，所有key都是unwatched**）
+
+## Redis事务和数据库事务的区别
+
+Redis中开启一个事务之后，命令会被添加到一个队列中，当调用exec命令时，一依次执行队列中的所有命令，若有命令失败也不会终止，返回最后所有命令的执行结果
+
+<img src="https://img.leftover.cn/img-md/202407161507122.png" alt="image-20240716150702062" style="zoom:45%;" />
+
+## 事务失败的场景
+
+1. 命令没有添加到queue时失败了（命令名称错误，命令参数错误，内存溢出了…），这时候会取消整个事务
+2. 执行exec之后，事务执行过程中出现了错误，其他命令会正常执行，不会回滚
+
+## watch监控
+
+watch为redis事务提供了一种乐观锁的机制,即可以在事务之前监控某个key，若事务exec之前，key的内容被修改过，则事务将会被终止，返回nil
+
+```shell
+# 第一个客户端
+127.0.0.1:6379> get balance
+"100"
+127.0.0.1:6379> WATCH balance
+OK
+127.0.0.1:6379> MULTI
+OK
+127.0.0.1:6379(TX)> set balance 200
+QUEUED
+127.0.0.1:6379(TX)> set name hhh
+QUEUED
+
+# 另一个客户端
+127.0.0.1:6379> set balance 300
+OK
+
+# 回到第一个客户端
+127.0.0.1:6379(TX)> EXEC
+(nil) # 事务被abort，exec命令return nil
+127.0.0.1:6379> get name 
+"zwc" # 没有修改之前的值
+127.0.0.1:6379> get balance
+"300"
+```
+
+## lua脚本和事务
+
+lua脚本也具有原子性，使用事务能做的事情，在lua脚本上也能做到，并且lua脚本更快、更简单
 
 # Pipeline
 
