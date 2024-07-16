@@ -2056,16 +2056,218 @@ SDS是一个结构体：
 
 ## string
 
-## list
+1. string类型会根据不同的字符串长度，以及类型选择不同的编码类型。
 
-## hash
+   - 存储的是数值型：若大小在long类型的范围内，则采用int编码方式；直接将数据保存在RedisObject的ptr指针位置（刚好8B），不需要SDS
+   - 长度<=44B：采用embstr编码，此时RedisObject的头部和SDS是连续的一段空间，申请内存时只需要调用一次内存分配函数
+   - 长度>44B: 采用raw方式编码，基于sds实现，存储上线为512mb
 
+2. 三种编码方式的内存图
 
+   <img src="https://img.leftover.cn/img-md/202407162317684.png" alt="image-20240716231742638" style="zoom:45%;" />
+
+## List
+
+1. Redis的list结构类似一个双端链表，可以从首尾操作list中的元素。
+
+- 3.2版本之前，采用ziplist+linkedList来实现list，当元素数量小于512 且 元素大小均< 64B时采用ziplist编码方式，超过则采用LinkedList
+
+- 3.2版本之后，统一采用QuickList编码方式
+
+- 7.x之后，可以通过`list-max-listpack-size`（默认-2）来设置单个listpack的元素数量/大小
+
+  ```shell
+  # -5: max size: 64 Kb 
+  # -4: max size: 32 Kb 
+  # -3: max size: 16 Kb 
+  # -2: max size: 8 Kb  
+  # -1: max size: 4 Kb 
+  # > 0 :表示元素的数量
+  ```
+
+  首先list会采用listpack的编码方式，当其不能采用单个listpack时（根据上面的配置决定），会转化为quicklist（listpack+linkedlist），当list中的元素过少时，又会转化为listpack
+
+  ```c
+  void pushGenericCommand(client *c, int where, int xx) {
+      int j;
+  
+      robj *lobj = lookupKeyWrite(c->db, c->argv[1]);
+      if (checkType(c,lobj,OBJ_LIST)) return;
+      if (!lobj) {
+          if (xx) {
+              addReply(c, shared.czero);
+              return;
+          }
+  				// 创建listpack
+          lobj = createListListpackObject();
+          dbAdd(c->db,c->argv[1],lobj);
+      }
+    ...
+  }
+  ```
+
+  
+
+2. 内存图(quicklist6.x版本)
+
+   <img src="https://img.leftover.cn/img-md/202407162323809.png" alt="image-20240716232324777" style="zoom:60%;" />
 
 ## set
 
+1. set的特点是元素唯一，无序的，可以求交集、并集、差集
+
+2. 采用的编码方式：
+
+   - 当set集合中存储的元素**都是整数，并且元素数量<=`set-max-intset-entries`(默认512)时**，set会采用intset的编码方式，以节省内存空间
+   - 7.x版本之后的版本，当元素的<= `set-max-listpack-entries`(默认128) 时，采用listpack的编码方式。7.x之前则没有这个判断
+   - 否则采用HT编码方式（dict），dict中的key用来存储元素，value统一为null。这里和jdk的hashset的设计方式类似
+
+   ```c
+   robj *setTypeCreate(sds value, size_t size_hint) {
+     // intset
+       if (isSdsRepresentableAsLongLong(value,NULL) == C_OK && size_hint <= server.set_max_intset_entries)
+           return createIntsetObject();
+     // listpack
+       if (size_hint <= server.set_max_listpack_entries)
+           return createSetListpackObject();
+   
+   //ht
+       robj *o = createSetObject();
+       dictExpand(o->ptr, size_hint);
+       return o;
+   }
+   ```
+
+3. 内存结构(7.x之前)
+
+   <img src="https://img.leftover.cn/img-md/202407170051592.png" alt="image-20240717005125546" style="zoom:50%;" />
+
 ## zset
 
+1. zset的特点
+   - 根据score排序
+   - member唯一
+   - 可以根据member查询score
+2. 在7.x之前，元素数量不多时，ht+skiplist方案的优势不明显，而且更耗费内存。因此zset会采用**ziplist结构**来节省内存；不过需要满足：
+   - 元素数量<= `zset-max-ziplist-entries` ，默认128
+   - 每个元素都<= `zset-max-ziplist-value` 字节，默认64B
+3. 在7.x之后，元素数量不多时，ht+skiplist方案的优势不明显，而且更耗费内存。因此zset会采用**listpack结构**来节省内存；不过需要满足：
+   - 元素数量<= `zset-max-listpack-entries` ，默认128
+   - 每个元素都<= `zset-max-listpack-value` 字节，默认64B
+4. 采用ziplist和listpack时，相邻的元素分别保存key 、value
+
+```c
+int zsetAdd(robj *zobj, double score, sds ele, int in_flags, int *out_flags, double *newscore) {
+		...
+    /* Update the sorted set according to its encoding. */
+    if (zobj->encoding == OBJ_ENCODING_LISTPACK) {
+        unsigned char *eptr;
+					//判断元素是否存在
+        if ((eptr = zzlFind(zobj->ptr,ele,&curscore)) != NULL) {
+          //存在
+           ...
+            return 1;
+        } else if (!xx) {
+          // 不存在
+          // 判断是否需要转化为skiplist+ht的模式
+            if (zzlLength(zobj->ptr)+1 > server.zset_max_listpack_entries ||
+                sdslen(ele) > server.zset_max_listpack_value ||
+                !lpSafeToAdd(zobj->ptr, sdslen(ele)))
+            {
+              // 转化为skiplsit+ht的方式
+                zsetConvertAndExpand(zobj, OBJ_ENCODING_SKIPLIST, zsetLength(zobj) + 1);
+            } 
+    }
+  ...
+}
+```
+
+```c
+robj *zsetTypeCreate(size_t size_hint, size_t val_len_hint) {
+    if (size_hint <= server.zset_max_listpack_entries &&
+        val_len_hint <= server.zset_max_listpack_value)
+    {
+      //创建为listpack
+        return createZsetListpackObject();
+    }
+
+  // 否则采用skiplist+ht
+    robj *zobj = createZsetObject();
+    zset *zs = zobj->ptr;
+    dictExpand(zs->dict, size_hint);
+    return zobj;
+}
+```
+
+```c
+
+robj *createZsetObject(void) {
+    zset *zs = zmalloc(sizeof(*zs));
+    robj *o;
+	
+  // 创建ht
+    zs->dict = dictCreate(&zsetDictType);
+  // 创建skiplsit
+    zs->zsl = zslCreate();
+    o = createObject(OBJ_ZSET,zs);
+    o->encoding = OBJ_ENCODING_SKIPLIST;
+    return o;
+}
+
+```
+
+4. 采用ziplist时的内存结构（7.x之前）
+
+   <img src="https://img.leftover.cn/img-md/202407170053866.png" alt="image-20240717005310792" style="zoom: 67%;" />
+
+   采用ht+skiplist的内存结构（7.x之前）
+
+   <img src="https://img.leftover.cn/img-md/202407170054686.png" alt="image-20240717005406640" style="zoom:90%;" />
+
+   
+
+## hash
+
+1. **7.x之前**，当数据量较小时，hash结构会采用ziplist编码，以节省内存。ziplist中相邻的两个entry分别保存field 和value
+
+   **7.x之后**，当数据量较小时，hash结构会采用listpack编码，以节省内存。listpack中相邻的两个entry分别保存field 和value
+
+   数据量较大时，hash结构会转为ht编码（dict），触发条件有2个：
+
+   - ziplist/listpack的元素数量超过了`hash-max-ziplist-entries / hash-max-listpack-entries`(默认512)
+   - ziplist/listpack中任意entry的大小超过了`hash-max-ziplist-value  / hash-max-listpack-value`（默认64B）
+
+   ```c
+   void hashTypeTryConversion(robj *o, robj **argv, int start, int end) {
+       int i;
+       size_t sum = 0;
+   
+       if (o->encoding != OBJ_ENCODING_LISTPACK) return;
+   
+       size_t new_fields = (end - start + 1) / 2;
+     // 超过了hash_max_listpack_entries， 转为ht
+       if (new_fields > server.hash_max_listpack_entries) {
+           hashTypeConvert(o, OBJ_ENCODING_HT);
+           dictExpand(o->ptr, new_fields);
+           return;
+       }
+   
+       for (i = start; i <= end; i++) {
+           if (!sdsEncodedObject(argv[i]))
+               continue;
+           size_t len = sdslen(argv[i]->ptr);
+         // 任意元素超过了hash_max_listpack_value， 转为ht
+           if (len > server.hash_max_listpack_value) {
+               hashTypeConvert(o, OBJ_ENCODING_HT);
+               return;
+           }
+           sum += len;
+       }
+       if (!lpSafeToAdd(o->ptr, sum))
+           hashTypeConvert(o, OBJ_ENCODING_HT);
+   }
+   ```
+   
 # Redis过期Key的处理
 
 1. Redis数据库的结构
