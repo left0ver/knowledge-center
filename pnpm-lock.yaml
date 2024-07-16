@@ -21,12 +21,9 @@ importers:
         specifier: ^9.5.0
         version: 9.5.0
     devDependencies:
-      '@iconify-json/bi':
-        specifier: ^1.1.23
-        version: 1.1.23
-      '@iconify-json/fa6-solid':
-        specifier: ^1.1.22
-        version: 1.1.22
+      '@iconify/json':
+        specifier: ^2.2.225
+        version: 2.2.228
       less:
         specifier: ^4.2.0
         version: 4.2.0
@@ -446,11 +443,8 @@ packages:
     cpu: [x64]
     os: [win32]
 
-  '@iconify-json/bi@1.1.23':
-    resolution: {integrity: sha512-1te+g9ZzI+PU1Lv6Xerd3XPXf4DE6g3TvDL2buIopTAfrauPHyXCHPFQMrzoQVNrVPCpN3rv3vBtJMPyBwJ9IA==}
-
-  '@iconify-json/fa6-solid@1.1.22':
-    resolution: {integrity: sha512-iHc4hE/BVPwQ84/1z31kfuPauhfrOgLTaba5dmpfYuLsvh67gByUK0yfNyQuo/Y6NAPOx/6s6guj0f0qjzoxbg==}
+  '@iconify/json@2.2.228':
+    resolution: {integrity: sha512-Xd1CgQ1bCFLrp4t+J2TU+AXM+kVHAFLfhK9FcZD54aMPlzENdQMJ5JhfFzCgnsLBAIW1PbSY2Edbm4tt2Tw9Lg==}
 
   '@iconify/types@2.0.0':
     resolution: {integrity: sha512-+wluvCrRhXrhyOmRDJ3q8mux9JkKy5SJ/v8ol2tu4FVjyYvtEzkc/3pK15ET6RKg4b4w4BmTk1+gsCUhf21Ykg==}
@@ -1951,13 +1945,10 @@ snapshots:
   '@esbuild/win32-x64@0.21.5':
     optional: true
 
-  '@iconify-json/bi@1.1.23':
+  '@iconify/json@2.2.228':
     dependencies:
       '@iconify/types': 2.0.0
-
-  '@iconify-json/fa6-solid@1.1.22':
-    dependencies:
-      '@iconify/types': 2.0.0
+      pathe: 1.1.2
 
   '@iconify/types@2.0.0': {}
 

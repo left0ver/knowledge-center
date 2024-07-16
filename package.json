@@ -12,8 +12,7 @@
   "author": "left0ver",
   "license": "CC BY-NC-SA",
   "devDependencies": {
-    "@iconify-json/bi": "^1.1.23",
-    "@iconify-json/fa6-solid": "^1.1.22",
+    "@iconify/json": "^2.2.225",
     "less": "^4.2.0",
     "postcss-nested": "^6.0.1",
     "unocss": "^0.57.7",

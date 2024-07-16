@@ -11,7 +11,6 @@ export function MarkdownTransform(): Plugin {
     async transform(code, id) {
       if (!id.match(/\.md\b/))
         return null
-      log(id)
       const [ i] = id.split('/').slice(-1)
       // cut index.md
       if (i === 'index.md')
