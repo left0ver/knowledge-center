@@ -86,6 +86,7 @@ export default defineConfig({
           {text: 'SQL',link: 'sql'},
           {text: 'Maven', link: 'Maven'},
           {text: 'Redis', link: 'Redis'},
+          {text: 'JUC', link: 'JUC'},
           {text: 'Java面试题', link: 'Java面试题'},
           {text: 'IDEA常用快捷键',link: 'IDEA常用快捷键'}
         ]
