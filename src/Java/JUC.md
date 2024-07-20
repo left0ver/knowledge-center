@@ -86,16 +86,16 @@ public class Sleep_yield {
 }
 ```
 
+### yield
+
+`yield`有退让，谦让的意思，调用yeild方法会让那个当前线程从Running进入Runnable状态，但是，需要注意的是，让出的CPU并不是代表当前线程不再运行了，如果在下一次竞争中，又获得了CPU时间片当前线程依然会继续运行。另外，让出的时间片只会分配**给当前线程相同优先级**的线程
+
 ## sleep vs wait
 
 1. sleep是Thread类上面的方法，而wait是Object类上的方法
 2. sleep不需要强制和synchronized配合使用，而wait需要和synchronized一起使用（需要先获取到锁）
 3. sleep在睡眠的同时只会释放cpu，不会释放对象锁；而wait在等待的时候会释放cpu和对象锁
 4. 调用之后线程都会进入`WAITING`或者`TIMED_WAITING`状态
-
-## yield
-
-`yield`有退让，谦让的意思，调用yeild方法会让那个当前线程从Running进入Runnable状态，但是，需要注意的是，让出的CPU并不是代表当前线程不再运行了，如果在下一次竞争中，又获得了CPU时间片当前线程依然会继续运行。另外，让出的时间片只会分配**给当前线程相同优先级**的线程
 
 ## join
 
