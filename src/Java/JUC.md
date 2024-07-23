@@ -6,6 +6,12 @@
 
 `jconsole` 可以查看Java运行时的内存，线程等情况
 
+[jcstress](https://github.com/openjdk/jcstress)压力测试工具
+
+`javap -v xxx.class` 命令：将某个class编译成字节码文件
+
+[jclasslib Bytecode Viewer](https://plugins.jetbrains.com/plugin/9248-jclasslib-bytecode-viewer)插件可以用来查看类的字节码
+
 # 并发和并行
 
 并发是指多个任务交替执行。
@@ -88,7 +94,7 @@ public class Sleep_yield {
 
 ### yield
 
-`yield`有退让，谦让的意思，调用yeild方法会让那个当前线程从Running进入Runnable状态，但是，需要注意的是，让出的CPU并不是代表当前线程不再运行了，如果在下一次竞争中，又获得了CPU时间片当前线程依然会继续运行。另外，让出的时间片只会分配**给当前线程相同优先级**的线程
+`yield`有退让，谦让的意思，调用yeild方法会让那个当前线程从Running进入Ready状态，但是，需要注意的是，让出的CPU并不是代表当前线程不再运行了，如果在下一次竞争中，又获得了CPU时间片当前线程依然会继续运行。另外，让出的时间片只会分配**给当前线程相同优先级**的线程
 
 ## sleep vs wait
 
@@ -96,6 +102,12 @@ public class Sleep_yield {
 2. sleep不需要强制和synchronized配合使用，而wait需要和synchronized一起使用（需要先获取到锁）
 3. sleep在睡眠的同时只会释放cpu，不会释放对象锁；而wait在等待的时候会释放cpu和对象锁
 4. 调用之后线程都会进入`WAITING`或者`TIMED_WAITING`状态
+
+## park vs wait
+
+1. wait，notify，notifyAll必须配合 synchronized 一起使用，而park ，unpark不必
+2. park、unpark是以线程为单位来阻塞和唤醒线程，而notify只能随机唤醒一个等待线程，notifyAll是幻想所有的等待线程
+3. park & unpark 可以先unpark，而wait & notify 不能先notify（先调用notify 再执行wait还是会阻塞）
 
 ## join
 
@@ -481,9 +493,593 @@ reference: [JEP 374: Deprecate and Disable Biased Locking](https://openjdk.org/j
 
 <img src="https://img.leftover.cn/img-md/202407210118120.png" alt="image-20240721011824948" style="zoom:50%;" />
 
-# 变量的线程安全分析
+# ReentrantLock
+
+1. 相对于synchronized ,ReentrantLock 具备以下特点：
+
+   - 和synchronized一样，都支持**可重入**
+
+   - **可中断**，可以调用这个方法`lock.lockInterruptibly()`获取**可以被打断的锁**，之后其他线程可以调用`t1.interrupt()` 打断这个线程
+
+   - **可以设置超时时间**
+
+     - 可以使用`lock.tryLock()`方法获取锁，可以设置超时时间，在超时时间内获取到锁了返回true，否则返回false（可以做一些其他的逻辑）
+
+   - **有公平锁和非公平锁两种锁（默认非公平锁）**，synchronized 只有非公平锁
+
+   - **支持多个条件变量**
+
+     - synchronized只有一个条件变量，调用了wait方法的线程都会进入`waitSet`中
+
+     - ReentrantLock可以设置多个条件变量，可以调用xxxcondition.await() 方法 让线程进入不同的等待队列，再调用xxxcondition.signal() / signalAll() 唤醒某个等待队列中的 一个/全部 线程
+
+       >和 synchronized 一样，调用awiat方法时，必须获取到了锁，否则会抛出异常
+
+# 重排序
+
+## 重排序概述
+
+1. 编译器优化的重排序。编译器在不改变单线程程序语义的前提下，可以重新调整语句的执行顺序。
+2. 指令级并行的重排序。现代cpu采用了指令级并行技术来将多条指令重叠执行。如果**不存在数据依赖性**，cpu可以改变语句对应机器指令的执行顺序；
+3. 内存系统的重排序。由于cpu使用缓存和读/写缓冲区，这使得加载和存储操作看上去可能是在乱序执行的。
+
+1属于编译器重排序，而2和3统称为cpu重排序。这些重排序会导致线程安全的问题，一个很经典的例子就是DCL问题。**针对编译器重排序**，JMM的编译器重排序规则会禁止一些**特定类型的编译器重排序**；**针对处理器重排序**，编译器在生成指令序列的时候会通过**插入内存屏障指令来禁止某些特殊的处理器重排序**（volatile的底层原理就是插入内存屏障来防止重排序）
+
+## as-if-serial 原则
+
+不管怎么重排序（编译器和处理器为了提供并行度），（单线程）程序的执行结果不能被改变。
+
+## DCL（double-checked-locking）问题
+
+单例模式算是比较常见的设计模式之一了，而`双重检查单例` 是一种比较常见的单例模式的实现之一
+
+```java
+    class Singleton {
+
+        private volatile Singleton instance = null;
+
+        public Singleton getInstance() {
+                synchronized (Singleton.class) {
+                    if (instance == null) {
+                        instance = new Singleton();
+                    }
+                }
+            return instance;
+        }
+    }
+```
+
+看上面这段代码，这段代码中使用synchronized来保证线程安全，但这样也有一个缺点，就是当instance已经不为null之后，每次调用getInstance方法都会需要获取锁，大家都知道，这是一种比较耗时的操作，因此我们可以在synchronized前面加一层判断，这就是所谓double-checked
+
+```java
+    class Singleton {
+
+        private volatile Singleton instance = null;
+
+        public Singleton getInstance() {
+            if (instance == null) {
+                synchronized (Singleton.class) {
+                    if (instance == null) {
+                        instance = new Singleton();
+                    }
+                }
+            }
+            return instance;
+        }
+    }
+```
+
+这是getInstance方法的字节码
+
+```java
+ 0 aload_0
+ 1 getfield #3 <leftover/DCL$Singleton.instance : Lleftover/DCL$Singleton;>
+ 4 ifnonnull 44 (+40)
+ 7 ldc #4 <leftover/DCL$Singleton>
+ 9 dup
+10 astore_1
+11 monitorenter
+12 aload_0
+13 getfield #3 <leftover/DCL$Singleton.instance : Lleftover/DCL$Singleton;>
+16 ifnonnull 34 (+18)
+19 aload_0
+20 new #4 <leftover/DCL$Singleton>
+23 dup
+24 aload_0
+25 getfield #1 <leftover/DCL$Singleton.this$0 : Lleftover/DCL;>
+28 invokespecial #5 <leftover/DCL$Singleton.<init> : (Lleftover/DCL;)V>
+31 putfield #3 <leftover/DCL$Singleton.instance : Lleftover/DCL$Singleton;>
+34 aload_1
+35 monitorexit
+36 goto 44 (+8)
+39 astore_2
+40 aload_1
+41 monitorexit
+42 aload_2
+43 athrow
+44 aload_0
+45 getfield #3 <leftover/DCL$Singleton.instance : Lleftover/DCL$Singleton;>
+48 areturn
+```
+
+对应` instance = new Singleton();`的字节码大致如下：
+
+```java
+20 new #4 <leftover/DCL$Singleton>  // new 一个对象
+23 dup															// 将引用复制一份
+28 invokespecial #5 <leftover/DCL$Singleton.<init> : (Lleftover/DCL;)V> // 执行构造函数
+31 putfield #3 <leftover/DCL$Singleton.instance : Lleftover/DCL$Singleton;> //将对象引用复制给instance变量
+```
+
+可以看出这个语句对应好多条指令，因此这里有指令重排序的风险，第28行和第31行是可能指令重排序的（单线程下这两条指令调换顺序不会有影响），因此可能先执行31行再执行28行
+
+我们假设发生了重排序,执行顺序变为了这样，当t1线程执行了31行时，此时将对象复制给了instance，因此这时候instance不为null，但是此时还没执行构造函数
+
+假设此时切换到t2线程，首先判断instance是否为null，此时已经不为 null 了，这时候会直接return，所以这时候return的就是一个还没初始化完毕的对象
+
+```java
+20 new #4 <leftover/DCL$Singleton>
+23 dup 
+31 putfield #3 <leftover/DCL$Singleton.instance : Lleftover/DCL$Singleton;>
+28 invokespecial #5 <leftover/DCL$Singleton.<init> : (Lleftover/DCL;)V>
+```
+
+这就是指令重排序导致的DCL问题
+
+
+
+**解决办法：**给instance变量加上 `volatile `关键字即可防止重排序
+
+# volatile
+
+1. volatile 翻译为易变的，可以修饰 静态成员变量/成员变量 ，顾名思义，该关键字的作用为标记这个变量为易变的，这样就可以避免线程从自己的工作缓存中查找变量的值，必须每次去主存中获取它的值。这样每个线程都从主存中取这个变量的值，因此当一个线程修改了这个变量的值，其他线程就能立刻“看得见” ，所谓可见性。
+
+   <img src="https://img.leftover.cn/img-md/202407221917712.png" alt="image-20240722191759599" style="zoom: 50%;" />
+
+>synchronized 语句块即可以保证代码块的原子性，也同时保证代码块内变量的可见性，但缺点是synchronized是属于重量级操作，性能相对更低
+
+
+
+2. volatile的底层实现原理是内存屏障（Memory Barrier）
+   - 对volatile变量的 `写指令后` 会加入写屏障
+   - 对volatile变量的 `读指令前` 会加入读屏障
+
+
+
+3. 可见性问题以及如何保证可见性？
+
+   每个线程都有属于自己的工作内存，并且会把位于主存中的共享变量拷贝到自己的工作内存，之后的读写操作均使用位于工作内存的变量副本，并在某个时刻将工作内存的变量副本写回到主存中去。
+
+   > 因此这就是缓存优化导致的可见性问题，一个线程对共享变量的修改，另外一个线程不能够立刻看到
+
+   <img src="https://img.leftover.cn/img-md/202407230949807.png" alt="image-20240723094925699" style="zoom: 40%;" />
+
+4. 有序性问题以及如何保证有序性？
+
+   为了提高性能，编译器和处理器常常会对指令进行重排序。在单线程环境下重排序不会有什么问题，但在多线程环境下，这种操作会影响多线程的执行顺序，从而导致错误
+
+   <img src="https://img.leftover.cn/img-md/202407230950060.png" alt="image-20240723095015998" style="zoom: 40%;" />
+
+# happens-before规则
+
+happens-before 规定了对共享变量的写操作对其它线程的读操作可见，抛开以下 happens-before 规则，JMM 并不能保证一个线程对共享变量的写，对于其它线程对该共享变量的读可见
+
+1. **程序次序规则（Program Order Rule）**：在一个线程内，按照控制流顺序，书写在前面的操作先行发生于书写在后面的操作。
+
+2. **管程锁定规则（Monitor Lock Rule）**: 线程解锁 m 之前对变量的写，对于接下来对 m 加锁的其它线程对该变量的读可见 **(即synchronized可以保证可见性)**
+
+```java
+static int x;
+static Object m = new Object();
+new Thread(()->{
+ synchronized(m) {
+ x = 10;
+ }
+},"t1").start();
+new Thread(()->{
+ synchronized(m) {
+ System.out.println(x);
+ }
+},"t2").start();
+```
+
+3. **volatile 变量规则（Volatile Variable Rule）**:线程对 volatile 变量的写，对接下来其它线程对该变量的读可见 **(即volatile 可以保证可见性)**
+
+```java
+volatile static int x;
+new Thread(()->{
+ x = 10;
+},"t1").start();
+new Thread(()->{
+ System.out.println(x);
+},"t2").start();
+```
+
+4. **线程启动规则（Thread Start Rule）**：线程 start 前对变量的写，对该线程开始后对该变量的读可见
+
+   这个例子中 updater 线程修改了stop，但是对 getter线程不可见，因此getter线程不会输出`getter stopped."` ,将` getter.start();` 语句放到 `stop = true;`的后面，即可得到正确结果
+
+   ```java
+   package leftover;
+   
+   import lombok.extern.slf4j.Slf4j;
+   
+   @Slf4j
+   public class happens_before {
+   
+       private static boolean stop = false;
+   
+       public static void main(String[] args) {
+           Thread getter = new Thread(new Runnable() {
+               @Override
+               public void run() {
+                   while (true) {
+                       if (stop) {
+                           System.out.println("getter stopped.");
+                           break;
+                       }
+                   }
+               }
+           }, "getter");
+   
+           Thread updater = new Thread(new Runnable() {
+               @Override
+               public void run() {
+                   getter.start();
+                   try {
+                       Thread.sleep(1000);
+                   } catch (InterruptedException e) {
+                       throw new RuntimeException(e);
+                   }
+                   stop = true;
+                   System.out.println("updater set stop true.");
+   
+                   while (true) {
+                   }
+               }
+           });
+           updater.start();
+       }
+   
+   }
+   
+   ```
+
+5. **线程终止规则**：线程结束前对变量的写，对其它线程得知它结束后的读可见（比如其它线程调用 t1.isAlive() 或 t1.join()等待
+
+它结束）
+
+```java
+public class happens_before {
+    static int x;
+    static Object m = new Object();
+
+    public static void main(String[] args) throws InterruptedException {
+        Thread t1 = new Thread(() -> {
+            x = 10;
+        }, "t1");
+        t1.start();
+		    t1.join();
+//          or
+//        while (t1.isAlive()) {
+//            Thread.yield();
+//        }
+      
+      // 调用了join 或者 isAlive方法判断他是否结束，则读可见 printf 10 ，否则 printf 0
+        System.out.println(x);
+    }
+}
+
+```
+
+6. **线程中断规则**：对线程interrupted()方法的调用 **先行于** 被中断线程的代码检测到中断时间的发生。
+
+```java
+public class happens_before {
+    static int x;
+
+    public static void main(String[] args) throws InterruptedException {
+        Thread t2 = new Thread(() -> {
+            while (true) {
+                if (Thread.currentThread().isInterrupted()) {
+                    System.out.println(x); // 10
+                    break;
+                }
+            }
+        }, "t2");
+        t2.start();
+
+        new Thread(() -> {
+            try {
+                Thread.sleep(1000);
+            } catch (InterruptedException e) {
+                throw new RuntimeException(e);
+            }
+            x = 10;
+            t2.interrupt();
+        }, "t1").start();
+    }
+}
+
+```
+
+7. **对象终结规则（Finalizer Rule）** ：一个对象的初始化完成（构造函数结束）先行发生于它的 finalize()方法的开始
+
+   ```java
+   @Slf4j
+   public class happens_before {
+   
+   
+       private static boolean stop = false;
+   
+       public static void main(String[] args) {
+           Test test = new Test();
+           //test设置为null以后就可以回收了
+           test = null;
+           while (true) {
+               //促使垃圾回收
+               byte[] bytes = new byte[1024 * 1024];
+           }
+       }
+   
+       static class Test {
+           public Test() {
+               stop = true;
+               System.out.println("set stop true in constructor");
+           }
+   
+           @Override
+           protected void finalize() throws Throwable {
+               if (stop) {
+                   System.out.println("stop true in finalize, threadName  " + Thread.currentThread().getName());
+               } else {
+                   System.out.println("stop false in finalize, threadName " + Thread.currentThread().getName());
+               }
+           }
+       }
+   
+   }
+   
+   ```
+
+   
+
+8. **传递性（Transitivity）**：如果操作 A 先行发生于操作 B，操作 B 先行发生于操作 C，那就可以得出操作 A 先行发生于操作 C 的结论。
+
+
+
+巨人的肩膀：[Happens-Before 原则深入解读](https://xie.infoq.cn/article/d0f4d9e812ee03b6a32265686)
+
+
+
+# 原子类
+
+## CAS
+
+### 什么是CAS？
+
+​    CAS全称 Compare And Swap （比较并交换）， CAS使用的是一种乐观锁的思想，每次线程操作时都认为自己可以成功执行，但当多个线程同时使用CAS操作一个变量时，只有一个会成功执行并成功更新，其他线程均会失败，但是失败的线程不会被挂起，会被告知没有swap成功，线程可以继续重试，也可以放弃操作。
+
+​	CAS方法有3个参数（expect，offset，update）-> 旧的值，旧值对应的内存地址，新值 ；当swap之前会取出对应内存中的值进行判断，是否与旧的值一致，若一致，则替换成功；若不是，则不替换
+
+>##  底层原理
+>
+>1. 其实 CAS 的底层是 lock cmpxchg 指令（X86 架构），CMPXCHG是“Compare and Exchange”的缩写，是原子指令，在单核 CPU 和多核 CPU 下都能够保证【比较-交换】的原子性
+>
+>2. 在多核状态下，某个核执行到带 lock 的指令时，CPU 会让总线锁住，当这个核把此指令执行完毕，再开启总线。这个过程中不会被线程的调度机制所打断，保证了多个线程对内存操作的准确性，是原子的。
+
+### CAS的特点
+
+- 因为CAS不会上锁，因此不会发生死锁
+
+- 结合CAS和volatile 可以实现无锁并发，适用于线程数少，多核CPU的场景
+
+  >1. CAS操作通常会在失败时自旋重试，而不是阻塞线程。自旋操作在大多数情况下能更快地完成，因为避免了线程的上下文切换。
+  >
+  >2. 线程要想一直保持运行，需要额外CPU的支持，若CPU少，那么线程还是会因为没有分到时间片而进入Runnable（Ready）状态，从而导致上下文切换，会产生比较大的开销
+  >
+  >3. 如果线程数比较多，会经常出现CAS失败的情况，这样自旋的次数就会增多
+  >
+  >4. CAS使用的是乐观锁的思想，大多数情况下可以直接成功
+  >
+  >**综上：** CAS+ volatile 实现无锁并发，适用于并发度不是特别高，多核CPU的场景
+
+  
+
+### CAS的三大问题
+
+#### ABA问题
+
+#### 长时间自旋
+
+#### 多个共享变量的原子操作
+
+#  变量的线程安全分析
 
 <img src="https://img.leftover.cn/img-md/202407201258809.png" alt="image-20240720125805140" style="zoom:50%;" />
+
+# 并发设计模式
+
+## 两段式终止模式
+
+```java
+@Slf4j
+public class Monitor {
+    private static Thread monitor;
+  // 保证可见性
+    private volatile boolean stop = false;
+
+    public void stop() {
+        stop = true;
+        monitor.interrupt();
+    }
+
+    public void beforeExit() {
+        log.info("处理后事");
+    }
+
+    public void start1() throws InterruptedException {
+        monitor = new Thread(new Runnable() {
+            @Override
+            public void run() {
+                while (true) {
+                    if (stop) {
+                      
+                        beforeExit();
+                        return;
+                    }
+
+                    try {
+                        Thread.sleep(1000);
+                        log.info("执行监控逻辑");
+                    } catch (InterruptedException e) {
+                        throw new RuntimeException(e);
+                    }
+                 
+                }
+            }
+        }, "monitor");
+        monitor.start();
+    }
+
+    public static void main(String[] args) throws InterruptedException {
+        Monitor monitor = new Monitor();
+        monitor.start1();
+
+
+        Thread.sleep(1000);
+
+        new Thread(new Runnable() {
+            @Override
+            public void run() {
+                monitor.stop();
+            }
+        }, "t1").start();
+    }
+}
+
+```
+
+
+
+## Balking（犹豫）模式
+
+Balking（犹豫）模式用于一个线程发现另一个线程或本线程已经做了某一件相同的事，那么本线程就无需再做了，直接return；有点类似单例模式
+
+还是这个监视器的例子，为了防止多次调用监视器的start方法，我们可以添加一个starting变量，使用synchronized来防止线程安全的问题
+
+```java
+@Slf4j
+public class Monitor {
+    private static Thread monitor;
+    private volatile boolean stop = false;
+
+  // 判断是否已经start
+    private  boolean starting = false;
+
+    public void stop() {
+        stop = true;
+        starting = false;
+        monitor.interrupt();
+    }
+
+    public void beforeExit() {
+        log.info("处理后事");
+    }
+
+ 
+    public void start1() throws InterruptedException {
+      // 防止线程安全问题
+        synchronized (this) {
+          // 如果已经start，则直接return
+            if (starting) {
+                return;
+            }
+            starting = true;
+        }
+        monitor = new Thread(new Runnable() {
+            @Override
+            public void run() {
+                while (true) {
+                    if (stop) {
+                        beforeExit();
+                        stop = false;
+                        return;
+                    }
+
+                    try {
+                        Thread.sleep(1000);
+                    } catch (InterruptedException e) {
+                        throw new RuntimeException(e);
+                    }
+                    log.info("执行监控逻辑");
+                }
+            }
+        }, "monitor");
+        monitor.start();
+    }
+}
+```
+
+
+
+## 消费者、生产者模型
+
+```java
+public class 生产者消费者模型 {
+    public static void main(String[] args) {
+
+    }
+}
+
+
+// 消息队列
+class MessageQueue {
+  // 消息队列，存放消息
+    private final Queue<Message> queue = new LinkedList<>();
+  // 消息队列的容量
+    private final int capcity;
+
+    public MessageQueue(int capcity) {
+        this.capcity = capcity;
+    }
+
+    // 获取消息
+    public Message take() throws InterruptedException {
+
+        synchronized (queue) {
+            while (queue.isEmpty()) {
+                queue.wait();
+            }
+        }
+        Message message = queue.poll();
+        queue.notifyAll();
+        return message;
+    }
+
+    // 存入消息
+    public void put(Message message) throws InterruptedException {
+        synchronized (queue) {
+            while (queue.size() >= capcity) {
+                queue.wait();
+            }
+        }
+        queue.add(message);
+        queue.notifyAll();
+    }
+}
+
+
+@ToString
+@Getter
+@Setter
+@AllArgsConstructor
+// 消息类
+class Message {
+    private Integer id;
+    private Object value;
+}
+```
 
 # 常见的线程安全类
 
