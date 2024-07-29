@@ -519,6 +519,10 @@ reference: [JEP 374: Deprecate and Disable Biased Locking](https://openjdk.org/j
 
 
 
+# AQS
+
+TODO：
+
 # ReentrantLock
 
 1. 相对于synchronized ,ReentrantLock 具备以下特点：
@@ -540,6 +544,257 @@ reference: [JEP 374: Deprecate and Disable Biased Locking](https://openjdk.org/j
      - ReentrantLock可以设置多个条件变量，可以调用xxxcondition.await() 方法 让线程进入不同的等待队列，再调用xxxcondition.signal() / signalAll() 唤醒某个等待队列中的 一个/全部 线程
 
        >和 synchronized 一样，调用awiat方法时，必须获取到了锁，否则会抛出异常
+
+## 原理
+
+### 可重入的原理
+
+获取锁：先判断一下state的值，为0的话就是当前线程没获取到锁，那么就尝试获取锁 ; 不为0，则判定是不是当前线程获取的锁，若是则重入，state+1
+
+释放锁：c = state-1 , 判断 c是否为0， 为0则释放锁，否则表示重入还没有结束
+
+```java
+        final boolean nonfairTryAcquire(int acquires) {
+            final Thread current = Thread.currentThread();
+            int c = getState();
+            if (c == 0) {
+                if (compareAndSetState(0, acquires)) {
+                    setExclusiveOwnerThread(current);
+                    return true;
+                }
+            }
+            else if (current == getExclusiveOwnerThread()) {
+                int nextc = c + acquires;
+                if (nextc < 0) // overflow
+                    throw new Error("Maximum lock count exceeded");
+                setState(nextc);
+                return true;
+            }
+            return false;
+        }
+```
+
+```java
+        protected final boolean tryRelease(int releases) {
+            int c = getState() - releases;
+            if (Thread.currentThread() != getExclusiveOwnerThread())
+                throw new IllegalMonitorStateException();
+            boolean free = false;
+            if (c == 0) {
+                free = true;
+                setExclusiveOwnerThread(null);
+            }
+            setState(c);
+            return free;
+        }
+```
+
+### 公平锁和非公平锁的原理
+
+**公平锁：锁的获取顺序就应该符合请求上的绝对时间顺序，满足FIFO**
+
+**非公平锁： 则不满足FIFO的特性 ，刚释放锁的线程可能再次获取到锁** 
+
+上面的是非公平锁 获取锁的 源码, 下面这个是公平锁的版本
+
+主要区别在于获取锁时会不会先判断阻塞队列中是否有元素，若有元素，则表示有别的线程更早请求锁，那么当前线程就不会尝试获取锁 ，会进入阻塞队列； 若没有元素，则当前线程当时获取锁
+
+```java
+        protected final boolean tryAcquire(int acquires) {
+            final Thread current = Thread.currentThread();
+            int c = getState();
+            if (c == 0) {
+                if (!hasQueuedPredecessors() &&
+                    compareAndSetState(0, acquires)) {
+                    setExclusiveOwnerThread(current);
+                    return true;
+                }
+            }
+            else if (current == getExclusiveOwnerThread()) {
+                int nextc = c + acquires;
+                if (nextc < 0)
+                    throw new Error("Maximum lock count exceeded");
+                setState(nextc);
+                return true;
+            }
+            return false;
+        }
+```
+
+> 公平锁和非公平锁的区别
+
+公平锁每次获取到锁为同步队列中的第一个节点，**保证请求资源时间上的绝对顺序**，而非公平锁有可能刚释放锁的线程下次继续获取该锁，则有可能导致其他线程永远无法获取到锁，**造成“饥饿”现象**。
+
+公平锁为了保证时间上的绝对顺序，需要频繁的上下文切换，而非公平锁会降低一定的上下文切换，降低性能开销。而非公平锁允许一个线程在释放锁后立即重新获得锁，而不必等待其他线程。这减少了线程在队列中等待的时间，从而减少了上下文切换。保证了系统更大的吞吐量。
+
+# ReentrantReadWriteLock
+
+读写锁：**可以多个线程同时读**，提高并发度，这个锁适用于读多写少的情况（例如缓存）
+
+对于读写锁，state的高16位存储读锁被获取的次数 ，state的低16位存储写锁被获取的次数（只能有一个线程获得写锁）
+
+>notice:
+>
+>1. 读锁不支持条件变量,写锁支持
+>2. 重入时升级不支持：即持有读锁的情况下去获取写锁，会导致获取写锁永久等（这种情况要先解除读锁，再申请写锁）
+>3. 重入时降级支持：即持有写锁的情况下去获取读锁
+
+## 获取写锁
+
+```java
+protected final boolean tryAcquire(int acquires) {
+    Thread current = Thread.currentThread();
+    int c = getState();
+    int w = exclusiveCount(c);
+  // 有线程获取了锁
+    if (c != 0) {
+        // (Note: if c != 0 and w == 0 then shared count != 0)
+      // 如果获取的是读锁 ｜｜ 获取的是写锁但是不是当前线程获取的
+        if (w == 0 || current != getExclusiveOwnerThread())
+            return false;
+        if (w + exclusiveCount(acquires) > MAX_COUNT)
+            throw new Error("Maximum lock count exceeded");
+				
+    	// 当前线程获取的写锁，重入
+        setState(c + acquires);
+        return true;
+    }
+  // writerShouldBlock是对于公平锁和非公平锁的实现
+    if (writerShouldBlock() ||
+        !compareAndSetState(c, c + acquires))
+        return false;
+    setExclusiveOwnerThread(current);
+    return true;
+}
+```
+
+## 释放写锁
+
+释放写锁的过程和ReentrantLock很类似，就是先state-1， 判断值是否为0，为0 则释放锁，否则就是重入次数-1，不释放锁
+
+```java
+protected final boolean tryRelease(int releases) {
+    if (!isHeldExclusively())
+        throw new IllegalMonitorStateException();
+    int nextc = getState() - releases;
+    boolean free = exclusiveCount(nextc) == 0;
+    if (free)
+        setExclusiveOwnerThread(null);
+    setState(nextc);
+    return free;
+}
+```
+
+## 获取读锁
+
+```java
+  protected final int tryAcquireShared(int unused) {
+            
+            Thread current = Thread.currentThread();
+            int c = getState();
+        //1. 如果写锁已经被获取并且获取写锁的线程不是当前线程的话，当前
+            if (exclusiveCount(c) != 0 &&
+                getExclusiveOwnerThread() != current)
+                return -1;
+
+            int r = sharedCount(c);
+            if (!readerShouldBlock() &&
+                r < MAX_COUNT &&
+                //2. 获取读锁，state的高16位+1（无论是否是重入，高16位都会+1，释放锁的时候也类似）
+                compareAndSetState(c, c + SHARED_UNIT)) {
+              // 采用 HoldCounter 来存储每个线程对应的重入次数，HoldCounter存储在readHolds中
+                if (r == 0) {
+                    firstReader = current;
+                    firstReaderHoldCount = 1;
+                } else if (firstReader == current) {
+                    firstReaderHoldCount++;
+                } else {
+                    HoldCounter rh = cachedHoldCounter;
+                    if (rh == null || rh.tid != getThreadId(current))
+                        cachedHoldCounter = rh = readHolds.get();
+                    else if (rh.count == 0)
+                        readHolds.set(rh);
+                    rh.count++;
+                }
+                return 1;
+            }
+    // 如果CAS失败或者已经获取读锁的线程再次获取读锁时在 fullTryAcquireShared 中处理
+            return fullTryAcquireShared(current);
+        }
+```
+
+## 读锁的释放
+
+```java
+protected final boolean tryReleaseShared(int unused) {
+            Thread current = Thread.currentThread();
+  // 处理重入的次数
+            if (firstReader == current) {
+                // assert firstReaderHoldCount > 0;
+                if (firstReaderHoldCount == 1)
+                    firstReader = null;
+                else
+                    firstReaderHoldCount--;
+            } else {
+                HoldCounter rh = cachedHoldCounter;
+                if (rh == null || rh.tid != getThreadId(current))
+                    rh = readHolds.get();
+                int count = rh.count;
+                if (count <= 1) {
+                    readHolds.remove();
+                    if (count <= 0)
+                        throw unmatchedUnlockException();
+                }
+                --rh.count;
+            }
+  // CAS释放锁
+            for (;;) {
+                int c = getState();
+                int nextc = c - SHARED_UNIT;
+                if (compareAndSetState(c, nextc))
+                  // 如果 nextc = 0 说明此时没有线程持有读锁了，可以将读锁释放
+                    return nextc == 0;
+            }
+        }
+```
+
+# StampedLock
+
+  StampedLock 是读写锁的一种改进版本，ReentrantReadWriteLock 中使用的是`悲观读`和`悲观写` ,即读和写之前要先获取锁
+
+而 StampedLock 引入了一种乐观读的优化方案，即直接读取数据（不加锁），之后再判断一下数据是否被修改了，如何被修改了就升级为悲观读，重新读取数据
+
+>StampedLock是不可重入的锁，且不支持Condition
+
+```java
+
+    public static void read() throws InterruptedException {
+        long stamp = lock.tryOptimisticRead();
+        log.info("尝试乐观读{}", stamp);
+
+        log.info("读数据");
+        Thread.sleep(1000);
+        if (lock.validate(stamp)) {
+            log.info("读取成功");
+            return;
+        } else {
+          // 升级为悲观读
+            long newStamp = lock.readLock();
+            try {
+                log.info("new stamp {}", newStamp);
+                log.info("读new 数据");
+
+            } finally {
+                lock.unlockRead(newStamp);
+            }
+        }
+    }
+
+```
+
+
+
+
 
 # 重排序
 
@@ -888,6 +1143,10 @@ public class happens_before {
 
 
 
+# final的原理
+
+TODO:
+
 # 原子类
 
 ## CAS
@@ -929,6 +1188,472 @@ public class happens_before {
 #### 长时间自旋
 
 #### 多个共享变量的原子操作
+
+## 原子整数
+
+- 原子整数包含：`AtomicInteger`、 `AtomicLong` 、 `AtomicBoolean`
+
+## 原子引用
+
+- `AtomicReference`：存储一个Object，CAS比较的是对象的引用是否一致,若一致则替换。这个类的一个缺点就是不能知道别的线程是否修改了数据,即所谓的ABA问题
+
+  下面这个例子中，线程t1先将值修改为了B，再修改为了A，之后main线程执行CAS时 ，发现值是A，和自己期待的一致，因此替换成功
+
+```java
+    @Test
+    public void ABA() throws InterruptedException {
+        String s1 = "A";
+        AtomicReference<String> atomicReference = new AtomicReference<>(s1);
+
+        new Thread(new Runnable() {
+            @Override
+            public void run() {
+                atomicReference.getAndSet("B");
+                atomicReference.getAndSet("A");
+            }
+        }, "t1").start();
+        Thread.sleep(1000);
+
+
+        System.out.println(atomicReference.compareAndSet("A", "C")); //true
+    }
+```
+
+- `AtomicStampedReference`:可以在`AtomicReference` 的基础上再多存储一个版本号，调用CAS方法时不仅会比较数据是否一致，还会比较版本号是否一致，全部一致才会修改，并设置新的版本号。**可以解决上面ABA问题**
+- `AtomicMarkableReference`: AtomicStampedReference 可以根据版本号看出修改了多少次，有时候我们并不在乎修改了多少次，只在乎是否被修改过，那么就可以使用 AtomicMarkableReference 类 ，它在 AtomicReference 的基础上多存储了一个 boolean 类型的值
+
+## 原子数组
+
+上面提到的原子类都无法解决数组中某个元素的的并发更新的线程安全问题，Java提供了3个原子数组类来保证数组中某个元素并发更新的线程安全问题。
+
+`AtomicIntegerArray` 、 `AtomicLongArray` 、 `AtomicReferenceArray` 
+
+下面的例子中，使用原子数组类可以得到正确结果，把注释去掉，使用正常的数组，则会发生线程安全问题，得不到正确的结果
+
+```java
+  @Test
+    public void 原子数组() throws InterruptedException {
+
+        AtomicIntegerArray array = new AtomicIntegerArray(5);
+        array.set(0, 10);
+
+//        int[] arr = new int[5];
+        new Thread(new Runnable() {
+            @Override
+            public void run() {
+                for (int i = 0; i < 10000; i++) {
+                    array.getAndIncrement(0);
+//                    arr[0]++;
+                }
+            }
+        }, "t1").start();
+        new Thread(new Runnable() {
+            @Override
+            public void run() {
+                for (int i = 0; i < 10000; i++) {
+                    array.getAndIncrement(0);
+//                    arr[0]++;
+                }
+            }
+        }, "t2").start();
+
+
+        Thread.sleep(10000);
+
+//        System.out.println(Arrays.toString(arr));
+        System.out.println(array);
+
+    }
+}
+```
+
+
+
+## 原子更新器
+
+原子更新器是保证对象的某个属性的线程安全，常见的类有 `AtomicIntegerFieldUpdater` 、 `AtomicLongFieldUpdater` 、 `AtomicReferenceFieldUpdater`
+
+**需要保证原子更新的那个属性必须为 `volatile`**
+
+```java
+    @Test
+    public void 字段更新器() {
+
+        User user = new User("zwc");
+        AtomicReferenceFieldUpdater<User, String> fieldUpdater = AtomicReferenceFieldUpdater.newUpdater(User.class, String.class, "name");
+        fieldUpdater.getAndSet(user,"zwc1");
+        System.out.println(fieldUpdater.get(user));
+    }
+
+    @AllArgsConstructor
+    @ToString
+    class User {
+      volatile   String name;
+    }
+```
+
+
+
+# 线程池
+
+## 线程池状态
+
+ThreadPoolExecutor 使用整型的原子变量ctl 来存储线程池的状态和线程数量。 int的高3位表示线程状态，低29位表示线程数量
+
+**目的是将线程状态和线程个数合二为一，这样就可以使用一次CAS操作进行赋值**
+
+```java
+// c为旧值，ctlOf返回的结果为新值  
+ctl.compareAndSet(c, ctlOf(targetState, workerCountOf(c))))
+```
+
+| 状态名     | 高3位 | 接收新任务 | 处理阻塞队列的任务 | 说明                                                         |
+| ---------- | ----- | ---------- | ------------------ | ------------------------------------------------------------ |
+| RUNNING    | 111   | Y          | Y                  |                                                              |
+| SHUTDOWN   | 000   | N          | Y                  | 调用线程池的shutdown方法会进入shutdown状态，不会接收新任务，但是会处理阻塞队列剩余任务 |
+| STOP       | 001   | N          | N                  | 调用线程池的shutDownNow方法会进入stop状态，会中断正在执行的任务，并且抛弃阻塞队列中的任务 |
+| TIDYING    | 010   | -          | -                  | 任务全部执行完毕，活动线程为0，即将进入终结                  |
+| TERMINATED | 011   | -          | -                  | 终结状态                                                     |
+
+## 线程池的参数
+
+```java
+public ThreadPoolExecutor(int corePoolSize,
+                          int maximumPoolSize,
+                          long keepAliveTime,
+                          TimeUnit unit,
+                          BlockingQueue<Runnable> workQueue,
+                          ThreadFactory threadFactory,
+                          RejectedExecutionHandler handler) 
+```
+
+- corePoolSize: 核心线程数量（最多保留的线程数）
+- maximumPoolSize： 最大的线程数量（核心线程数量+救急线程数量 <=最大线程数量）
+
+>救急线程：当阻塞队列满的时候，此时还有任务进来，但是阻塞队列装不下了，若可以创建救急线程（核心线程数量+救急线程数量 <=最大线程数量），则会创建救急线程来处理新的任务
+
+- keepAliveTime: 救急线程的生存时间
+- TimeUnit： 时间单位
+
+>当救急线程没有任务处理时，过了给定的时间则会自动终结
+
+- workQueue： 阻塞队列，用来存放任务
+- threadFactory： 线程工厂，可以自定义创建的线程的逻辑（例如添加日志记录，给线程取名字）
+- handler：拒绝策略
+
+## 拒绝策略
+
+若线程数量到达 maximumPoolSize 仍有任务到达，此时会执行拒绝策略。jdk默认提供了4种拒绝策略
+
+- AbortPolicy 让调用者抛出`RejectedExecutionException` 异常 （默认的策略）
+
+- CallerRunsPolicy： 让调用者运行任务
+
+- DiscardPolicy： 放弃本次任务
+
+- DiscardOldestPolicy： 放弃阻塞队列中最早的任务，本任务取而代之
+
+  
+
+<img src="https://img.leftover.cn/img-md/202407290206388.png" alt="image-20240729020644322" style="zoom:45%;" />
+
+## 线程池工具类（Executors）
+
+### newFixedThreadPool
+
+- 创建固定大小的线程池，即核心线程数 = 最大线程数 
+- 阻塞队列是无界的，可以放任意数量的任务
+
+>适用于任务量已知，相对耗时的任务
+
+### newCachedThreadPool
+
+```java
+    public static ExecutorService newCachedThreadPool() {
+        return new ThreadPoolExecutor(0, Integer.MAX_VALUE,
+                                      60L, TimeUnit.SECONDS,
+                                      new SynchronousQueue<Runnable>());
+    }
+
+```
+
+- 核心线程数为0，最大线程数为 `Integer.MAX_VALUE`
+- 救急线程的存活时间为1min
+- 队列采用了 SynchronousQueue 实现特点是，它没有容量，没有线程来取是放不进去的
+
+>整个线程池表现为线程数会根据任务量不断增长，没有上限，当任务执行完毕，空闲 1分钟后释放线程。 适合任务数比较密集，但每个任务执行时间较短的情况
+
+### newSingleThreadExecutor
+
+```java
+    public static ExecutorService newSingleThreadExecutor() {
+        return new FinalizableDelegatedExecutorService
+            (new ThreadPoolExecutor(1, 1,
+                                    0L, TimeUnit.MILLISECONDS,
+                                    new LinkedBlockingQueue<Runnable>()));
+    }
+```
+
+- 核心线程数 = 最大线程数 =1 
+- 阻塞队列无上限
+- 这里使用了装饰器模式，return 的线程池对象不能修改线程数量
+
+**和自己使用单个线程的区别：自己创建一个单线程串行执行任务，如果任务执行失败而终止那么没有任何补救措施，而线程池还会新建一个线程，保证池的正常工作**
+
+>适用于希望多个任务排队执行。线程数固定为 1，任务数多于 1 时，会放入无界队列排队。任务执行完毕，这唯一的线程也不会被释放
+
+### newScheduledThreadPool
+
+```java
+    public ScheduledThreadPoolExecutor(int corePoolSize) {
+        super(corePoolSize, Integer.MAX_VALUE, 0, NANOSECONDS,
+              new DelayedWorkQueue());
+    }
+
+```
+
+- jdk中提供了Timer对象来进行定时任务调度，但是所有的任务都是由一个线程串行执行的，只有前面任务的执行完了才能执行后面的任务，若任务执行过程中出现了异常没有被捕获，则整个程序会终止，因此这个类不是很适合用来做定时任务
+
+newScheduledThreadPool 是定时任务调度的线程池，用来执行定时任务。
+
+- 可以指定核心线程数 ， 最大线程数为 `Integer.MAX_VALUE` 
+- 救急线程的存活时间为0，即执行完任务立刻杀死救急线程
+- 使用的是无上限的延时队列
+
+- 任务执行过程中出现了没有捕获的异常也不会终止应用程序（和Timer的区别）
+
+```java
+    // 每周四执行一次定时任务
+    public void testScheduledThreadPool() {
+        ScheduledExecutorService scheduledThreadPool = Executors.newScheduledThreadPool(2);
+        // 一周的ms数
+        long period = 1000 * 60 * 60 * 24 * 7;
+        LocalDateTime now = LocalDateTime.now();
+        LocalDateTime time = now.withHour(18).withMinute(0).withSecond(0).withNano(0).with(DayOfWeek.THURSDAY);
+        if (now.isAfter(time)) {
+            time = time.plusWeeks(1);
+        }
+      // 当前到最近的周四的ms数
+        long initialDelay = Duration.between(now, time).toMillis();
+
+        scheduledThreadPool.scheduleAtFixedRate(() -> log.info("11"), initialDelay, period, TimeUnit.MILLISECONDS);
+    }
+```
+
+###  newSingleThreadScheduledExecutor
+
+```java
+    public static ScheduledExecutorService newSingleThreadScheduledExecutor() {
+        return new DelegatedScheduledExecutorService
+            (new ScheduledThreadPoolExecutor(1));
+    }
+```
+
+- 和 newScheduledThreadPool 类似，也是用来执行定时任务的，区别就是这个的核心线程只有1个， 最大线程数都是 `Integer.MAX_VALUE`
+
+- 使用了装饰器模式，return 的线程池对象不能调用 api 来设置线程池的线程数量
+
+### newWorkStealingPool
+
+## 如何处理线程池执行任务的过程中出现的异常
+
+若线程池中的线程在执行任务的过程中出现了异常是不会终止应用程序的运行的，但是这样的话，你自己也不清楚任务执行过程中是否出现了异常
+
+1. 可以在任务执行过程中自己捕获异常，对异常进行处理（记录日志…）
+2. 使用Future , futhure调用get时， 若任务出现了异常，则get方法会抛出异常，之后可以对异常做处理
+
+```java
+        ExecutorService pool = Executors.newFixedThreadPool(1);
+        Future<Boolean> f = pool.submit(() -> {
+            log.debug("task1");
+            int i = 1 / 0;
+            return true;
+        });
+        log.debug("result:{}", f.get());
+/*
+17:33:42.025 [pool-1-thread-1] DEBUG leftover.线程池工具类 - task1
+Exception in thread "main" java.util.concurrent.ExecutionException: java.lang.ArithmeticException: / by zero
+	at java.util.concurrent.FutureTask.report(FutureTask.java:122)
+	at java.util.concurrent.FutureTask.get(FutureTask.java:192)
+	at leftover.线程池工具类.main(线程池工具类.java:44)
+Caused by: java.lang.ArithmeticException: / by zero
+	at leftover.线程池工具类.lambda$main$0(线程池工具类.java:41)
+	at java.util.concurrent.FutureTask.run(FutureTask.java:266)
+	at java.util.concurrent.ThreadPoolExecutor.runWorker(ThreadPoolExecutor.java:1149)
+	at java.util.concurrent.ThreadPoolExecutor$Worker.run(ThreadPoolExecutor.java:624)
+	at java.lang.Thread.run(Thread.java:750)
+/*
+```
+
+
+
+
+
+
+
+## 线程池的一些方法
+
+1. submit: 传入一个Callable对象，return 一个Futhure对象，可以使用这个futhure对象获得返回值的结果
+2. invokeAll： 传入一个List<Callable> （可以给定超时时间，超时没有执行完毕的任务会被取消，抛出`CancellationException`）,返回一个Futhure集合 \
+3. invokeAny: 和 invokeAll 类似， 但是它返回的是第一个执行完毕的结果
+
+```java
+        String result = executorService.invokeAny(tasks);
+        log.info("{}", result);
+```
+
+4. shutdown:  线程池状态变为 SHUTDOWN 不会接收新任务，但会执行完已经提交的任务（该方法不会阻塞调用线程的执行）
+
+   
+
+   若想在shutdown之后做一些事情，可以调用 awaitTermination 等待一段时间
+
+   ```java
+           executorService.shutdown();
+           executorService.awaitTermination(2,TimeUnit.SECONDS);
+   				// do other
+   ```
+
+   也可以使用一个类继承线程池 `ThreadPoolExecutor` ,重写 onShutdown 方法
+
+5. shutdownNow： 线程池状态变为 STOP， 不会接收新的任务 ，用 interrupt 的方式中断正在执行的任务，将阻塞队列中的任务返回
+
+## 线程池的线程数量的设置
+
+过小会导致程序不能充分地利用系统资源、容易导致饥饿
+
+过大会导致更多的线程上下文切换，占用更多内存
+
+最好为一类任务创建一个线程池，这样可以提高线程池的利用率
+
+
+
+<img src="https://img.leftover.cn/img-md/202407291543341.png" alt="image-20240729154328312" style="zoom:50%;" />
+
+
+
+## tomcat的线程池
+
+Tomcat 线程池扩展了 ThreadPoolExecutor，行为稍有不同
+
+- 如果总线程数达到 maximumPoolSize
+
+  - 这时不会立刻抛 RejectedExecutionException 异常
+  - 而是再次尝试将任务放入队列，如果还失败，才抛出 RejectedExecutionException 异常
+
+- 创建核心线程和救急线程的行为也稍有不同
+
+  
+
+  <img src="https://img.leftover.cn/img-md/202407291708971.png" alt="image-20240729170840921" style="zoom:50%;" />
+
+  
+
+![image-20240729170634123](https://img.leftover.cn/img-md/202407291706214.png)
+
+
+
+<img src="https://img.leftover.cn/img-md/202407291706992.png" alt="image-20240729170643923" style="zoom:50%;" />
+
+## 线程池的整体流程
+
+先看当前线程数是否达到了给定的核心线程数，若没达到，则创建一个核心线程来执行任务 ，若达到了，则将任务添加进阻塞队列，核心线程从阻塞队列中取任务。
+
+若阻塞队列已经满了，若当前线程的个数< 最大线程数，则创建非核心线程执行到来的任务，否则执行拒绝策略
+
+
+
+# fork and join
+
+Fork/Join 是 JDK 1.7 加入的新的线程池实现，它体现的是一种分治思想，适用于能够进行任务拆分的 cpu 密集型运算
+
+Fork/Join 默认会创建与 cpu 核心数大小相同的线程池
+
+提交给 Fork/Join 线程池的任务需要继承 RecursiveTask（有返回值）或 RecursiveAction（没有返回值）
+
+```java
+@Slf4j
+public class forkAndJoin {
+    public static void main(String[] args) throws ExecutionException, InterruptedException {
+      // 创建fork join的线程池
+        ForkJoinPool forkJoinPool = new ForkJoinPool(4);
+
+        ForkJoinTask<Integer> taskResult = forkJoinPool.submit(new MyAddTask(1, 100));
+        log.info("{}", taskResult.get());  // 5050
+
+        Integer result = forkJoinPool.invoke(new MyAddTask(1, 100));
+        log.info("{}", result); // 5050
+
+
+    }
+
+    @ToString
+    static class MyAddTask extends RecursiveTask<Integer> {
+        private int begin;
+        private int end;
+
+        public MyAddTask(int begin, int end) {
+            this.begin = begin;
+            this.end = end;
+        }
+
+        @Override
+        protected Integer compute() {
+            if (begin == end) {
+                return begin;
+            } else if (end - begin == 1) {
+                return end + begin;
+            } else {
+                int mid = (begin + end) / 2;
+                // 将start - end 的相加拆分成2个任务， start-mid ，mid+1 -end
+                MyAddTask addTask1 = new MyAddTask(begin, mid);
+                addTask1.fork();
+                MyAddTask addTask2 = new MyAddTask(mid + 1, end);
+                addTask2.fork();
+                // 得到两个任务相加的结果
+                return addTask1.join() + addTask2.join();
+
+            }
+
+        }
+    }
+}
+
+```
+stream的并行流其实也是使用了fork and join的实现方式，会将任务进行拆分，最后合并，从下面的例子中就可以看出
+
+```java
+        List<Integer> listOfNumbers = Arrays.asList(1, 2, 3, 4);
+        listOfNumbers.parallelStream().forEach(number ->
+                System.out.println(number + " " + Thread.currentThread().getName())
+        );
+		/*
+		3 main
+4 ForkJoinPool.commonPool-worker-1
+2 ForkJoinPool.commonPool-worker-2
+1 ForkJoinPool.commonPool-worker-1
+
+		*/
+```
+对于下面这个例子，我们想要求数组的元素的和+5 ，使用串行流可以很容易得到结果，但是如果使用并行流，由于他会将任务进行拆分，每个线程在进行任务计算时都会加5，因此会得到错误的结果（实际结果可能因公共 fork-join 池中使用的线程数而有所不同）
+
+```java
+List<Integer> listOfNumbers = Arrays.asList(1, 2, 3, 4);
+int sum = listOfNumbers.parallelStream().reduce(5, Integer::sum);
+```
+为了修复这个问题,我们可以这样。 因此，我们需要谨慎考虑哪些操作可以并行运行。
+```java
+  		 List<Integer> list = Arrays.asList(1, 2, 3, 4);
+        Integer result1 = list.parallelStream().reduce(0, Integer::sum) + 5;
+        System.out.println(result1);
+```
+
+
+
+
+# ThreadLocal
+
+TODO:
 
 #  变量的线程安全分析
 
