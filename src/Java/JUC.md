@@ -788,7 +788,7 @@ protected final boolean tryReleaseShared(int unused) {
         }
     }
 
-```       
+```
 
 # 重排序
 
@@ -1172,12 +1172,118 @@ public class happens_before {
   
 
 ### CAS的三大问题
+TODO:
 
 #### ABA问题
 
 #### 长时间自旋
 
 #### 多个共享变量的原子操作
+
+## 原子整数
+
+- 原子整数包含：`AtomicInteger`、 `AtomicLong` 、 `AtomicBoolean`
+
+## 原子引用
+
+- `AtomicReference`：存储一个Object，CAS比较的是对象的引用是否一致,若一致则替换。这个类的一个缺点就是不能知道别的线程是否修改了数据,即所谓的ABA问题
+
+  下面这个例子中，线程t1先将值修改为了B，再修改为了A，之后main线程执行CAS时 ，发现值是A，和自己期待的一致，因此替换成功
+
+```java
+    @Test
+    public void ABA() throws InterruptedException {
+        String s1 = "A";
+        AtomicReference<String> atomicReference = new AtomicReference<>(s1);
+
+        new Thread(new Runnable() {
+            @Override
+            public void run() {
+                atomicReference.getAndSet("B");
+                atomicReference.getAndSet("A");
+            }
+        }, "t1").start();
+        Thread.sleep(1000);
+
+
+        System.out.println(atomicReference.compareAndSet("A", "C")); //true
+    }
+```
+
+- `AtomicStampedReference`:可以在`AtomicReference` 的基础上再多存储一个版本号，调用CAS方法时不仅会比较数据是否一致，还会比较版本号是否一致，全部一致才会修改，并设置新的版本号。**可以解决上面ABA问题**
+- `AtomicMarkableReference`: AtomicStampedReference 可以根据版本号看出修改了多少次，有时候我们并不在乎修改了多少次，只在乎是否被修改过，那么就可以使用 AtomicMarkableReference 类 ，它在 AtomicReference 的基础上多存储了一个 boolean 类型的值
+
+## 原子数组
+
+上面提到的原子类都无法解决数组中某个元素的的并发更新的线程安全问题，Java提供了3个原子数组类来保证数组中某个元素并发更新的线程安全问题。
+
+`AtomicIntegerArray` 、 `AtomicLongArray` 、 `AtomicReferenceArray` 
+
+下面的例子中，使用原子数组类可以得到正确结果，把注释去掉，使用正常的数组，则会发生线程安全问题，得不到正确的结果
+
+```java
+  @Test
+    public void 原子数组() throws InterruptedException {
+
+        AtomicIntegerArray array = new AtomicIntegerArray(5);
+        array.set(0, 10);
+
+//        int[] arr = new int[5];
+        new Thread(new Runnable() {
+            @Override
+            public void run() {
+                for (int i = 0; i < 10000; i++) {
+                    array.getAndIncrement(0);
+//                    arr[0]++;
+                }
+            }
+        }, "t1").start();
+        new Thread(new Runnable() {
+            @Override
+            public void run() {
+                for (int i = 0; i < 10000; i++) {
+                    array.getAndIncrement(0);
+//                    arr[0]++;
+                }
+            }
+        }, "t2").start();
+
+
+        Thread.sleep(10000);
+
+//        System.out.println(Arrays.toString(arr));
+        System.out.println(array);
+
+    }
+}
+```
+
+
+
+## 原子更新器
+
+原子更新器是保证对象的某个属性的线程安全，常见的类有 `AtomicIntegerFieldUpdater` 、 `AtomicLongFieldUpdater` 、 `AtomicReferenceFieldUpdater`
+
+**需要保证原子更新的那个属性必须为 `volatile`**
+
+```java
+    @Test
+    public void 字段更新器() {
+
+        User user = new User("zwc");
+        AtomicReferenceFieldUpdater<User, String> fieldUpdater = AtomicReferenceFieldUpdater.newUpdater(User.class, String.class, "name");
+        fieldUpdater.getAndSet(user,"zwc1");
+        System.out.println(fieldUpdater.get(user));
+    }
+
+    @AllArgsConstructor
+    @ToString
+    class User {
+      volatile   String name;
+    }
+```
+
+
 
 #  变量的线程安全分析
 
