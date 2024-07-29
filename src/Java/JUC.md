@@ -518,6 +518,9 @@ reference: [JEP 374: Deprecate and Disable Biased Locking](https://openjdk.org/j
 <img src="https://img.leftover.cn/img-md/202407210118120.png" alt="image-20240721011824948" style="zoom:50%;" />
 
 
+# AQS
+
+TODO：
 
 # ReentrantLock
 
@@ -540,6 +543,252 @@ reference: [JEP 374: Deprecate and Disable Biased Locking](https://openjdk.org/j
      - ReentrantLock可以设置多个条件变量，可以调用xxxcondition.await() 方法 让线程进入不同的等待队列，再调用xxxcondition.signal() / signalAll() 唤醒某个等待队列中的 一个/全部 线程
 
        >和 synchronized 一样，调用awiat方法时，必须获取到了锁，否则会抛出异常
+## 原理
+
+### 可重入的原理
+
+获取锁：先判断一下state的值，为0的话就是当前线程没获取到锁，那么就尝试获取锁 ; 不为0，则判定是不是当前线程获取的锁，若是则重入，state+1
+
+释放锁：c = state-1 , 判断 c是否为0， 为0则释放锁，否则表示重入还没有结束
+
+```java
+        final boolean nonfairTryAcquire(int acquires) {
+            final Thread current = Thread.currentThread();
+            int c = getState();
+            if (c == 0) {
+                if (compareAndSetState(0, acquires)) {
+                    setExclusiveOwnerThread(current);
+                    return true;
+                }
+            }
+            else if (current == getExclusiveOwnerThread()) {
+                int nextc = c + acquires;
+                if (nextc < 0) // overflow
+                    throw new Error("Maximum lock count exceeded");
+                setState(nextc);
+                return true;
+            }
+            return false;
+        }
+```
+
+```java
+        protected final boolean tryRelease(int releases) {
+            int c = getState() - releases;
+            if (Thread.currentThread() != getExclusiveOwnerThread())
+                throw new IllegalMonitorStateException();
+            boolean free = false;
+            if (c == 0) {
+                free = true;
+                setExclusiveOwnerThread(null);
+            }
+            setState(c);
+            return free;
+        }
+```
+
+### 公平锁和非公平锁的原理
+
+**公平锁：锁的获取顺序就应该符合请求上的绝对时间顺序，满足FIFO**
+
+**非公平锁： 则不满足FIFO的特性 ，刚释放锁的线程可能再次获取到锁** 
+
+上面的是非公平锁 获取锁的 源码, 下面这个是公平锁的版本
+
+主要区别在于获取锁时会不会先判断阻塞队列中是否有元素，若有元素，则表示有别的线程更早请求锁，那么当前线程就不会尝试获取锁 ，会进入阻塞队列； 若没有元素，则当前线程当时获取锁
+
+```java
+        protected final boolean tryAcquire(int acquires) {
+            final Thread current = Thread.currentThread();
+            int c = getState();
+            if (c == 0) {
+                if (!hasQueuedPredecessors() &&
+                    compareAndSetState(0, acquires)) {
+                    setExclusiveOwnerThread(current);
+                    return true;
+                }
+            }
+            else if (current == getExclusiveOwnerThread()) {
+                int nextc = c + acquires;
+                if (nextc < 0)
+                    throw new Error("Maximum lock count exceeded");
+                setState(nextc);
+                return true;
+            }
+            return false;
+        }
+```
+
+> 公平锁和非公平锁的区别
+
+公平锁每次获取到锁为同步队列中的第一个节点，**保证请求资源时间上的绝对顺序**，而非公平锁有可能刚释放锁的线程下次继续获取该锁，则有可能导致其他线程永远无法获取到锁，**造成“饥饿”现象**。
+
+公平锁为了保证时间上的绝对顺序，需要频繁的上下文切换，而非公平锁会降低一定的上下文切换，降低性能开销。而非公平锁允许一个线程在释放锁后立即重新获得锁，而不必等待其他线程。这减少了线程在队列中等待的时间，从而减少了上下文切换。保证了系统更大的吞吐量。
+
+# ReentrantReadWriteLock
+
+读写锁：**可以多个线程同时读**，提高并发度，这个锁适用于读多写少的情况（例如缓存）
+
+对于读写锁，state的高16位存储读锁被获取的次数 ，state的低16位存储写锁被获取的次数（只能有一个线程获得写锁）
+
+>notice:
+>
+>1. 读锁不支持条件变量,写锁支持
+>2. 重入时升级不支持：即持有读锁的情况下去获取写锁，会导致获取写锁永久等（这种情况要先解除读锁，再申请写锁）
+>3. 重入时降级支持：即持有写锁的情况下去获取读锁
+
+## 获取写锁
+
+```java
+protected final boolean tryAcquire(int acquires) {
+    Thread current = Thread.currentThread();
+    int c = getState();
+    int w = exclusiveCount(c);
+  // 有线程获取了锁
+    if (c != 0) {
+        // (Note: if c != 0 and w == 0 then shared count != 0)
+      // 如果获取的是读锁 ｜｜ 获取的是写锁但是不是当前线程获取的
+        if (w == 0 || current != getExclusiveOwnerThread())
+            return false;
+        if (w + exclusiveCount(acquires) > MAX_COUNT)
+            throw new Error("Maximum lock count exceeded");
+				
+    	// 当前线程获取的写锁，重入
+        setState(c + acquires);
+        return true;
+    }
+  // writerShouldBlock是对于公平锁和非公平锁的实现
+    if (writerShouldBlock() ||
+        !compareAndSetState(c, c + acquires))
+        return false;
+    setExclusiveOwnerThread(current);
+    return true;
+}
+```
+
+## 释放写锁
+
+释放写锁的过程和ReentrantLock很类似，就是先state-1， 判断值是否为0，为0 则释放锁，否则就是重入次数-1，不释放锁
+
+```java
+protected final boolean tryRelease(int releases) {
+    if (!isHeldExclusively())
+        throw new IllegalMonitorStateException();
+    int nextc = getState() - releases;
+    boolean free = exclusiveCount(nextc) == 0;
+    if (free)
+        setExclusiveOwnerThread(null);
+    setState(nextc);
+    return free;
+}
+```
+
+## 获取读锁
+
+```java
+  protected final int tryAcquireShared(int unused) {
+            
+            Thread current = Thread.currentThread();
+            int c = getState();
+        //1. 如果写锁已经被获取并且获取写锁的线程不是当前线程的话，当前
+            if (exclusiveCount(c) != 0 &&
+                getExclusiveOwnerThread() != current)
+                return -1;
+
+            int r = sharedCount(c);
+            if (!readerShouldBlock() &&
+                r < MAX_COUNT &&
+                //2. 获取读锁，state的高16位+1（无论是否是重入，高16位都会+1，释放锁的时候也类似）
+                compareAndSetState(c, c + SHARED_UNIT)) {
+              // 采用 HoldCounter 来存储每个线程对应的重入次数，HoldCounter存储在readHolds中
+                if (r == 0) {
+                    firstReader = current;
+                    firstReaderHoldCount = 1;
+                } else if (firstReader == current) {
+                    firstReaderHoldCount++;
+                } else {
+                    HoldCounter rh = cachedHoldCounter;
+                    if (rh == null || rh.tid != getThreadId(current))
+                        cachedHoldCounter = rh = readHolds.get();
+                    else if (rh.count == 0)
+                        readHolds.set(rh);
+                    rh.count++;
+                }
+                return 1;
+            }
+    // 如果CAS失败或者已经获取读锁的线程再次获取读锁时在 fullTryAcquireShared 中处理
+            return fullTryAcquireShared(current);
+        }
+```
+
+## 读锁的释放
+
+```java
+protected final boolean tryReleaseShared(int unused) {
+            Thread current = Thread.currentThread();
+  // 处理重入的次数
+            if (firstReader == current) {
+                // assert firstReaderHoldCount > 0;
+                if (firstReaderHoldCount == 1)
+                    firstReader = null;
+                else
+                    firstReaderHoldCount--;
+            } else {
+                HoldCounter rh = cachedHoldCounter;
+                if (rh == null || rh.tid != getThreadId(current))
+                    rh = readHolds.get();
+                int count = rh.count;
+                if (count <= 1) {
+                    readHolds.remove();
+                    if (count <= 0)
+                        throw unmatchedUnlockException();
+                }
+                --rh.count;
+            }
+  // CAS释放锁
+            for (;;) {
+                int c = getState();
+                int nextc = c - SHARED_UNIT;
+                if (compareAndSetState(c, nextc))
+                  // 如果 nextc = 0 说明此时没有线程持有读锁了，可以将读锁释放
+                    return nextc == 0;
+            }
+        }
+```
+
+# StampedLock
+
+  StampedLock 是读写锁的一种改进版本，ReentrantReadWriteLock 中使用的是`悲观读`和`悲观写` ,即读和写之前要先获取锁
+
+而 StampedLock 引入了一种乐观读的优化方案，即直接读取数据（不加锁），之后再判断一下数据是否被修改了，如何被修改了就升级为悲观读，重新读取数据
+
+>StampedLock是不可重入的锁，且不支持Condition
+
+```java
+
+    public static void read() throws InterruptedException {
+        long stamp = lock.tryOptimisticRead();
+        log.info("尝试乐观读{}", stamp);
+
+        log.info("读数据");
+        Thread.sleep(1000);
+        if (lock.validate(stamp)) {
+            log.info("读取成功");
+            return;
+        } else {
+          // 升级为悲观读
+            long newStamp = lock.readLock();
+            try {
+                log.info("new stamp {}", newStamp);
+                log.info("读new 数据");
+
+            } finally {
+                lock.unlockRead(newStamp);
+            }
+        }
+    }
+
+```       
 
 # 重排序
 
