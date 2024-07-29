@@ -77,6 +77,7 @@ export default defineConfig({
         items: [
           { text: 'JavaSE', link: 'JavaSE' },
           { text: 'JavaWeb', link: 'JavaWeb' },
+          {text: 'JUC', link: 'JUC'},
           {text: 'Spring', link: 'spring6'},
           { text: 'SpringMVC', link: 'springmvc' },
           { text: 'Mybatis', link: 'Mybatis' },
@@ -86,7 +87,6 @@ export default defineConfig({
           {text: 'SQL',link: 'sql'},
           {text: 'Maven', link: 'Maven'},
           {text: 'Redis', link: 'Redis'},
-          {text: 'JUC', link: 'JUC'},
           {text: 'Java面试题', link: 'Java面试题'},
           {text: 'IDEA常用快捷键',link: 'IDEA常用快捷键'}
         ]
