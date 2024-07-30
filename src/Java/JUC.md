@@ -1340,6 +1340,21 @@ newScheduledThreadPool 是定时任务调度的线程池，用来执行定时任
 
 ### newWorkStealingPool
 
+```java
+    public static ExecutorService newWorkStealingPool() {
+        return new ForkJoinPool
+            (Runtime.getRuntime().availableProcessors(),
+             ForkJoinPool.defaultForkJoinWorkerThreadFactory,
+             null, true);
+    }
+```
+
+名为`任务窃取线程池`, 底层使用的是 ForkJoinPool ，默认会创建一个和自己 cpu 核数相同的 ForkJoinPool
+
+详情请看 [fork and join](#fork and join )
+
+
+
 ## 如何处理线程池执行任务的过程中出现的异常
 
 若线程池中的线程在执行任务的过程中出现了异常是不会终止应用程序的运行的，但是这样的话，你自己也不清楚任务执行过程中是否出现了异常
@@ -1452,9 +1467,15 @@ Tomcat 线程池扩展了 ThreadPoolExecutor，行为稍有不同
 
 Fork/Join 是 JDK 1.7 加入的新的线程池实现，它体现的是一种分治思想，适用于能够进行任务拆分的 cpu 密集型运算
 
-Fork/Join 默认会创建与 cpu 核心数大小相同的线程池
-
 提交给 Fork/Join 线程池的任务需要继承 RecursiveTask（有返回值）或 RecursiveAction（没有返回值）
+
+fork 方法用于异步执行一个子任务，而 join 方法通过阻塞当前线程来等待子任务的执行结果。
+
+
+
+ForkJoinPool 默认会创建与 cpu 核心数大小相同的线程池 
+
+ForkJoinPool 中有一个成员变量  `WorkQueue[] workQueues` ，每一个线程都有一个任务队列，当自己的任务队列中没有任务的时候，它可以从其他工作线程的任务队列中"窃取"任务。这样所有的工作线程都能保持忙碌的状态，能够充分发挥多核cpu的特点
 
 ```java
  @Slf4j
