@@ -12,3 +12,5 @@
 `command + b` 进入方法体里面/ 返回调用的地方
 
 `command + e` 查看最近打开的文件列表
+
+`command + option + m` 将某段代码提取为方法
