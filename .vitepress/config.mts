@@ -41,7 +41,7 @@ export default defineConfig({
     nav: [
     ],
     outline:{
-      level: [1,3],
+      level: [1,2],
       label:"大纲"
     },
     editLink: {
