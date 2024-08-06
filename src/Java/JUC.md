@@ -1171,7 +1171,9 @@ public class happens_before {
 
 巨人的肩膀：[Happens-Before 原则深入解读](https://xie.infoq.cn/article/d0f4d9e812ee03b6a32265686)
 
+# final的底层原理
 
+TODO：
 
 # 原子类
 
@@ -1499,6 +1501,10 @@ Tomcat 线程池扩展了 ThreadPoolExecutor，行为稍有不同
 
 
 
+## 线程池的原理
+
+TODO：
+
 # fork-and-join
 
 Fork/Join 是 JDK 1.7 加入的新的线程池实现，它体现的是一种分治思想，适用于能够进行任务拆分的 cpu 密集型运算
@@ -1742,15 +1748,1271 @@ public class cyclicBarrier {
 
 # CompletableFuture
 
-TODO:
+## 创建异步任务
+
+1. CompletableFuture.runAsync() 创建一个没有返回值的异步任务
+2. CompletableFuture.supplyAsync() 创建一个有返回值的异步任务
+
+若没有传入线程池，默认使用 ForkJoinPool.commonPool() 作为线程池（里面的线程是守护线程）
+
+
+
+## 常用api
+
+### 获取结果
+
+get：获取返回的结果，需要在编译的时候处理异常
+
+getNow(T valueIfAbsent): 和get类似，如果已经完成了，则返回计算的结果，否则返回所给的值；不需要在编译的时候处理异常，运行时若出现了异常则抛出异常
+
+join：和get类似，获取返回的结果。but 不需要在编译的时候处理异常，运行时若出现了异常则抛出异常
+
+complete(T value): 若此时没有完成，则使用所给的值返回
+
+completeExceptionally(Throwable ex)： 若此时还没完成，则抛出一个所给的异常
+
+### 任务异步回调
+
+thenApply/thenApplyAsync :第一个任务执行完成后，执行第二个回调方法任务，会将第一个任务的执行结果，作为入参，传递到回调方法中，并且回调方法是有返回值的。
+
+```java
+  CompletableFuture<Integer> completableFuture = CompletableFuture.supplyAsync(new Supplier<Integer>() {
+            @Override
+            public Integer get() {
+                return 11;
+            }
+        }).thenApply(new Function<Integer, Integer>() {
+            @Override
+            public Integer apply(Integer value) {
+                log.info("{}", value); //11
+                return value + 9;
+            }
+        });
+        System.out.println(completableFuture.join()); // 20
+```
+
+>thenApply/thenApplyAsync 的区别：
+>
+>- 调用thenRun方法时，和上一个任务**共用同一个线程池**。
+>- 调用thenRunAsync方法时，则**使用的是ForkJoin线程池**
+
+```java
+   private static final Executor asyncPool = useCommonPool ?
+        ForkJoinPool.commonPool() : new ThreadPerTaskExecutor();
+        
+    public CompletableFuture<Void> thenRun(Runnable action) {
+        return uniRunStage(null, action);
+    }
+
+    public CompletableFuture<Void> thenRunAsync(Runnable action) {
+        return uniRunStage(asyncPool, action);
+    }
+```
+
+
+
+thenAccept / thenAcceptAsync:  和thenApply 类似， but thenAccept 的回调函数将上一个任务的执行结果作为入参，没有返回值
+
+thenRun / thenRunAsync: 和 thenApply 类似，但是 thenRun 的参数是传入一个 Runnable 对象，没有返回值
+
+
+
+### 多个任务组合处理
+
+thenCombine / thenAcceptBoth / runAfterBoth都表示：**将两个CompletableFuture组合起来，只有这两个都正常执行完了，才会执行某个任务**。
+
+区别在于：
+
+- thenCombine：会将两个任务的执行结果作为方法入参，传递到指定方法中，且**有返回值**
+- thenAcceptBoth: 会将两个任务的执行结果作为方法入参，传递到指定方法中，且**无返回值**
+- runAfterBoth 不会把执行结果当做方法入参，且没有返回值。
+
+
+
+applyToEither / acceptEither / runAfterEither 都表示：将两个CompletableFuture组合起来，只要其中一个执行完了,就会执行某个任务。
+
+区别在于：
+
+- applyToEither：会将已经执行完成的任务，作为方法入参，传递到指定方法中，且有返回值
+- acceptEither: 会将已经执行完成的任务，作为方法入参，传递到指定方法中，且无返回值
+- runAfterEither： 不会把执行结果当做方法入参，且没有返回值。
+
+allOf: **所有任务都执行完成后**，返回一个 CompletableFuture 。如果任意一个任务异常，allOf的CompletableFuture，执行get方法，会抛出异常
+
+anyOf: **任意一个任务执行完**，返回一个 CompletableFuture。如果执行的任务异常，anyOf的CompletableFuture，执行get方法，会抛出异常
+
+thenCompose: thenCompose  方法在 CompletableFuture 中用于组合两个异步操作。它允许你在第一个 CompletableFuture 完成后，使用其结果启动另一个异步操作，并返回一个新的 CompletableFuture. 相比于 thenApply 等api ，thenCompose 相对灵活很多。
+
+# ConcurrentHashMap
+
+## 线程安全的集合类
+
+1. 遗留的线程安全的集合类，内部都使用了 `synchronized` 来保证线程安全 ,例如 HashTable 、Vector
+2. 将线程不安全的集合类变为线程安全的集合类，调用 Collections.synchronizedMap() 、Collections.synchronizedList() 等方法
+3. JUC包下的集合类
+
+
+
+## JDK1.8
+
+```java
+ 		// hash表
+		transient volatile Node<K,V>[] table;
+
+		// 整个table就是一个Node数组
+		static class Node<K,V> implements Map.Entry<K,V> {}
+
+
+		// 扩容时的新hash 表， 只有在扩容时不为null
+    private transient volatile Node<K,V>[] nextTable;
+
+		/*
+		用来做扩容控制的字段
+		-1 表示table 正在初始化
+		-（1+ 扩容线程数 ）表示table 正在扩容
+		当table为null时， sizeCtl 为初始化table的大小 ，初始化/扩容完成之后， sizeCtl为下一次扩容的阈值
+		*/
+    private transient volatile int sizeCtl;
+
+	    /**
+     * TreeNodes used at the heads of bins. TreeBins do not hold user
+     * keys or values, but instead point to list of TreeNodes and
+     * their root. They also maintain a parasitic read-write lock
+     * forcing writers (who hold bin lock) to wait for readers (who do
+     * not) to complete before tree restructuring operations.
+     */
+
+	// 作为treebin 的头节点， 存储root 和first
+    static final class TreeBin<K,V> extends Node<K,V> {}
+		// treebin 的节点， 存储 parent ，left ，right
+		static final class TreeNode<K,V> extends Node<K,V> {
+
+```
+
+
+
+### 构造函数
+
+主要就是确定table初始化的大小
+
+```java
+    public ConcurrentHashMap(int initialCapacity,float loadFactor, int concurrencyLevel) {
+        if (!(loadFactor > 0.0f) || initialCapacity < 0 || concurrencyLevel <= 0)
+            throw new IllegalArgumentException();
+      
+      // 确保table的大小>= 并发数
+        if (initialCapacity < concurrencyLevel)   // Use at least as many bins
+            initialCapacity = concurrencyLevel;   // as estimated threads
+      
+      // 确定table初始化的大小，2^n
+        long size = (long)(1.0 + (long)initialCapacity / loadFactor);
+        int cap = (size >= (long)MAXIMUM_CAPACITY) ?
+            MAXIMUM_CAPACITY : tableSizeFor((int)size);
+      
+        this.sizeCtl = cap;
+    }
+```
+
+### Put
+
+```java
+ //  onlyIfAbsent为true时 ，只有key不存在时才会put ， onlyIfAbsent为false（默认） 时，若key存在，则覆盖value
+final V putVal(K key, V value, boolean onlyIfAbsent) {
+        if (key == null || value == null) throw new NullPointerException();
+  // 计算hash
+        int hash = spread(key.hashCode());
+        int binCount = 0;
+  
+        for (Node<K,V>[] tab = table;;) {
+            Node<K,V> f; int n, i, fh;
+          // 当table还没初始化时，初始化table
+            if (tab == null || (n = tab.length) == 0)
+                tab = initTable();
+           // 找该 hash 值对应的数组下标，得到第一个节点 f，且没有元素，则之间插入
+            else if ((f = tabAt(tab, i = (n - 1) & hash)) == null) {
+              // 使用CAS插入，若插入不成功则进行下一轮循环
+                if (casTabAt(tab, i, null,
+                             new Node<K,V>(hash, key, value, null)))
+                    break;                   // no lock when adding to empty bin
+            }
+          // table正在扩容， 则去帮助别的线程一起扩容
+            else if ((fh = f.hash) == MOVED)
+                tab = helpTransfer(tab, f);
+            else {
+               // 到这里就是说，f 是该位置的头节点，而且不为空
+                V oldVal = null;
+             // 获取数组该位置的头节点的锁（这里锁的是每个链表的头节点）
+                synchronized (f) {
+                    if (tabAt(tab, i) == f) {
+                      // hash >= 0, 表示是正常的链表
+                        if (fh >= 0) {
+                          // 用于累加，记录链表的长度
+                            binCount = 1;
+                            for (Node<K,V> e = f;; ++binCount) {
+                                K ek;
+                              // 如果发现了"相等"的 key，判断是否要进行值覆盖，然后也就可以 break 了
+                                if (e.hash == hash &&
+                                    ((ek = e.key) == key ||
+                                     (ek != null && key.equals(ek)))) {
+                                    oldVal = e.val;
+                                    if (!onlyIfAbsent)
+                                        e.val = value;
+                                    break;
+                                }
+                              //到了链表的末尾，将新的value插入链表的末尾
+                                Node<K,V> pred = e;
+                                if ((e = e.next) == null) {
+                                    pred.next = new Node<K,V>(hash, key,
+                                                              value, null);
+                                    break;
+                                }
+                            }
+                        }
+                      // hash<0 ,判断是否是红黑树，使用
+                        else if (f instanceof TreeBin) {
+                            Node<K,V> p;
+                            binCount = 2;
+                          // 调用红黑树的插值方法插入新节点
+                            if ((p = ((TreeBin<K,V>)f).putTreeVal(hash, key,
+                                                           value)) != null) {
+                                oldVal = p.val;
+                                if (!onlyIfAbsent)
+                                    p.val = value;
+                            }
+                        }
+                    }
+                }
+              
+                if (binCount != 0) {
+                  // 判断是否要转为红黑色，即链表长度要>=8
+                    if (binCount >= TREEIFY_THRESHOLD)
+                      // 这里和hashMap一样，如果当前数组的长度小于 64，那么会选择进行数组扩容，而不是转换为红黑树
+                        treeifyBin(tab, i);
+                    if (oldVal != null)
+                        return oldVal;
+                    break;
+                }
+            }
+        }
+  
+  // 元素的个数累加，并且会尝试扩容
+        addCount(1L, binCount);
+        return null;
+    }
+```
+
+### initTable
+
+```java
+private final Node<K,V>[] initTable() {
+    Node<K,V>[] tab; int sc;
+    while ((tab = table) == null || tab.length == 0) {
+      // sizeCtl< 0 ,说明正在初始化，则让出cpu的使用权，just spin
+        if ((sc = sizeCtl) < 0)
+            Thread.yield(); 
+      // 没有初始化，使用CAS将 sizeCtl 改为-1 ，代表抢到了锁
+        else if (U.compareAndSwapInt(this, SIZECTL, sc, -1)) {
+            try {
+                if ((tab = table) == null || tab.length == 0) {
+                 // DEFAULT_CAPACITY 默认初始容量是 16
+                    int n = (sc > 0) ? sc : DEFAULT_CAPACITY;
+                  
+                  // 创建table
+                    Node<K,V>[] nt = (Node<K,V>[])new Node<?,?>[n];
+                    table = tab = nt;
+                  
+                    sc = n - (n >>> 2);
+                }
+            } finally {
+              // sizeCtl 为下一次扩容的阈值
+                sizeCtl = sc;
+            }
+            break;
+        }
+    }
+    return tab;
+}
+```
+
+### treeifyBin
+
+```java
+  private final void treeifyBin(Node<K,V>[] tab, int index) {
+        Node<K,V> b; int n, sc;
+        if (tab != null) {
+          // 当table的长度< 64时，进行扩容，而不是转为红黑树
+            if ((n = tab.length) < MIN_TREEIFY_CAPACITY)
+                tryPresize(n << 1);
+          
+          // b为当前链表的头节点
+            else if ((b = tabAt(tab, index)) != null && b.hash >= 0) {
+                synchronized (b) {
+                  
+                    if (tabAt(tab, index) == b) {
+                         // 下面就是遍历链表，建立一颗红黑树
+                        TreeNode<K,V> hd = null, tl = null;
+                        for (Node<K,V> e = b; e != null; e = e.next) {
+                            TreeNode<K,V> p =
+                                new TreeNode<K,V>(e.hash, e.key, e.val,
+                                                  null, null);
+                            if ((p.prev = tl) == null)
+                                hd = p;
+                            else
+                                tl.next = p;
+                            tl = p;
+                        }
+                      // 将红黑树设置到数组相应位置中
+                        setTabAt(tab, index, new TreeBin<K,V>(hd));
+                    }
+                }
+            }
+        }
+    }
+
+```
+
+### tryPresize
+
+```java
+// size 传进来已经翻了一番了
+private final void tryPresize(int size) {
+  // c = size *1.5 +1 ,再往上取最近的 2 的 n 次方。
+    int c = (size >= (MAXIMUM_CAPACITY >>> 1)) ? MAXIMUM_CAPACITY :
+        tableSizeFor(size + (size >>> 1) + 1);
+    int sc;
+  
+    while ((sc = sizeCtl) >= 0) {
+        Node<K,V>[] tab = table; int n;
+      // table没有初始化
+        if (tab == null || (n = tab.length) == 0) {
+            n = (sc > c) ? sc : c;
+            if (U.compareAndSwapInt(this, SIZECTL, sc, -1)) {
+                try {
+                    if (table == tab) {
+                        Node<K,V>[] nt = (Node<K,V>[])new Node<?,?>[n];
+                        table = nt;
+                        sc = n - (n >>> 2);
+                    }
+                } finally {
+                    sizeCtl = sc;
+                }
+            }
+        }
+        else if (c <= sc || n >= MAXIMUM_CAPACITY)
+            break;
+        else if (tab == table) {
+          // 是一个比较大的负数
+            int rs = resizeStamp(n);
+          // sc< 0,则表示正在扩容
+            if (sc < 0) {
+                Node<K,V>[] nt;
+                if ((sc >>> RESIZE_STAMP_SHIFT) != rs || sc == rs + 1 ||
+                    sc == rs + MAX_RESIZERS || (nt = nextTable) == null ||
+                    transferIndex <= 0)
+                    break;
+              // 尝试帮助扩容
+                if (U.compareAndSwapInt(this, SIZECTL, sc, sc + 1))
+                    transfer(tab, nt);
+            }
+          // 没有在扩容，则使用CAS尝试获取锁
+            else if (U.compareAndSwapInt(this, SIZECTL, sc,
+                                         //rs << RESIZE_STAMP_SHIFT) + 2 是一个负数
+                                         (rs << RESIZE_STAMP_SHIFT) + 2))
+              // 扩容
+                transfer(tab, null);
+        }
+    }
+}
+```
+
+### transfer
+
+此方法支持多线程执行，调用此方法的时候，会保证第一个发起数据迁移的线程，nextTab 参数为 null，之后再调用此方法的时候，nextTab 不会为 null。
+
+阅读源码之前，先要理解并发操作的机制。原数组长度为 n，所以我们有 n 个迁移任务，让每个线程每次负责一个小任务是最简单的，每做完一个任务再检测是否有其他没做完的任务，帮助迁移就可以了，而 Doug Lea 使用了一个 stride，简单理解就是步长，每个线程每次负责迁移其中的一部分，如每次迁移 16 个小任务（多核cpu下最小为16）。所以，我们就需要一个全局的调度者来安排哪个线程执行哪几个任务，这个就是属性 transferIndex 的作用。
+
+第一个发起数据迁移的线程会将 transferIndex 指向原数组最后的位置，然后从后往前的 stride 个任务属于第一个线程，然后将 transferIndex 指向新的位置，再往前的 stride 个任务属于第二个线程，依此类推。当然，这里说的第二个线程不是真的一定指代了第二个线程，也可以是同一个线程。就是把一个很大的迁移任务分成了很多个小的迁移任务
+
+```java
+// 将元素从旧的table 移动到新的table 
+private final void transfer(Node<K,V>[] tab, Node<K,V>[] nextTab) {
+        int n = tab.length, stride;
+  
+    // stride 在单核下直接等于 n，多核模式下为 n/8/NCPU，最小值是 16
+    // stride 可以理解为”步长“，有 n 个位置是需要进行迁移的，
+    //   将这 n 个任务分为多个任务包，每个任务包有 stride 个任务
+        if ((stride = (NCPU > 1) ? (n >>> 3) / NCPU : n) < MIN_TRANSFER_STRIDE)
+            stride = MIN_TRANSFER_STRIDE; 
+  // 如果 nextTab 为 null，先进行一次初始化
+  // 只有第一个调用的线程才为null
+        if (nextTab == null) {            // initiating
+            try {
+              // 创建nextTab
+                Node<K,V>[] nt = (Node<K,V>[])new Node<?,?>[n << 1];
+                nextTab = nt;
+            } catch (Throwable ex) {      // try to cope with OOME
+                sizeCtl = Integer.MAX_VALUE;
+                return;
+            }
+            nextTable = nextTab;
+     	// transferIndex 用于控制迁移的位置
+            transferIndex = n;
+        }
+        int nextn = nextTab.length;
+  
+    // ForwardingNode 翻译过来就是正在被迁移的 Node
+    // 这个构造方法会生成一个Node，key、value 和 next 都为 null， hash 为 MOVED
+   // 当数组的下标为i的位置的节点迁移完毕之后，会将位置为i的元素设置为 ForwardingNode，来告诉其他线程这个位置已经处理过了
+        ForwardingNode<K,V> fwd = new ForwardingNode<K,V>(nextTab);
+  
+  // advance 指的是做完了一个位置的迁移工作，可以准备做下一个位置的了
+        boolean advance = true;
+        boolean finishing = false; // to ensure sweep before committing nextTab
+  
+  // i 为索引位置，bound为边界，整体是从后往前遍历的
+        for (int i = 0, bound = 0;;) {
+            Node<K,V> f; int fh;
+         // 这个while循环，让 i 指向了 transferIndex，bound 指向了 transferIndex-stride（即边界）
+            while (advance) {
+                int nextIndex, nextBound;
+                if (--i >= bound || finishing)
+                    advance = false;
+              // transferIndex <= 0,说明原数组的所有位置都有相应的线程去处理了
+                else if ((nextIndex = transferIndex) <= 0) {
+                    i = -1;
+                    advance = false;
+                }
+                else if (U.compareAndSwapInt
+                         (this, TRANSFERINDEX, nextIndex,
+                          nextBound = (nextIndex > stride ?
+                                       nextIndex - stride : 0))) {
+                    bound = nextBound;
+                    i = nextIndex - 1;
+                    advance = false;
+                }
+            }
+            if (i < 0 || i >= n || i + n >= nextn) {
+                int sc;
+              // 完成了迁移操作，重新赋值sizeCtl为新的table下一次扩容的阈值
+                if (finishing) {
+                    nextTable = null;
+                    table = nextTab;
+                    sizeCtl = (n << 1) - (n >>> 1);
+                    return;
+                }
+              
+              
+             // 之前我们说过，sizeCtl 在迁移前会设置为 (rs << RESIZE_STAMP_SHIFT) + 2
+            // 然后，每有一个线程参与迁移就会将 sizeCtl 加 1，
+            // 这里使用 CAS 操作对 sizeCtl 进行减 1，代表做完了属于自己的任务
+
+                if (U.compareAndSwapInt(this, SIZECTL, sc = sizeCtl, sc - 1)) {
+                    if ((sc - 2) != resizeStamp(n) << RESIZE_STAMP_SHIFT)
+                        return;
+                // 到这里，说明 (sc - 2) == resizeStamp(n) << RESIZE_STAMP_SHIFT，
+                // 也就是说，所有的迁移任务都做完了，也就会进入到上面的 if(finishing){} 分支了
+                    finishing = advance = true;
+                    i = n;
+                }
+            }
+         // 如果位置 i 处是空的，没有任何节点，则不需要迁移，那么放入 ForwardingNode ”空节点“
+            else if ((f = tabAt(tab, i)) == null)
+                advance = casTabAt(tab, i, null, fwd);
+          //hash== -2 表示已经迁移过了
+            else if ((fh = f.hash) == MOVED)
+                advance = true; // already processed
+
+            else {
+              // 对链表的头节点加锁，进行迁移
+                synchronized (f) {
+                    if (tabAt(tab, i) == f) {
+                        Node<K,V> ln, hn;
+                        if (fh >= 0) {
+                            int runBit = fh & n;
+                            Node<K,V> lastRun = f;
+                            for (Node<K,V> p = f.next; p != null; p = p.next) {
+                                int b = p.hash & n;
+                                if (b != runBit) {
+                                    runBit = b;
+                                    lastRun = p;
+                                }
+                            }
+                            if (runBit == 0) {
+                                ln = lastRun;
+                                hn = null;
+                            }
+                            else {
+                                hn = lastRun;
+                                ln = null;
+                            }
+                            for (Node<K,V> p = f; p != lastRun; p = p.next) {
+                                int ph = p.hash; K pk = p.key; V pv = p.val;
+                                if ((ph & n) == 0)
+                                    ln = new Node<K,V>(ph, pk, pv, ln);
+                                else
+                                    hn = new Node<K,V>(ph, pk, pv, hn);
+                            }
+                            setTabAt(nextTab, i, ln);
+                            setTabAt(nextTab, i + n, hn);
+                            setTabAt(tab, i, fwd);
+                            advance = true;
+                        }
+                      // 进行红黑树的迁移
+                        else if (f instanceof TreeBin) {
+                            TreeBin<K,V> t = (TreeBin<K,V>)f;
+                            TreeNode<K,V> lo = null, loTail = null;
+                            TreeNode<K,V> hi = null, hiTail = null;
+                            int lc = 0, hc = 0;
+                            for (Node<K,V> e = t.first; e != null; e = e.next) {
+                                int h = e.hash;
+                                TreeNode<K,V> p = new TreeNode<K,V>
+                                    (h, e.key, e.val, null, null);
+                                if ((h & n) == 0) {
+                                    if ((p.prev = loTail) == null)
+                                        lo = p;
+                                    else
+                                        loTail.next = p;
+                                    loTail = p;
+                                    ++lc;
+                                }
+                                else {
+                                    if ((p.prev = hiTail) == null)
+                                        hi = p;
+                                    else
+                                        hiTail.next = p;
+                                    hiTail = p;
+                                    ++hc;
+                                }
+                            }
+                   // 如果一分为二后，节点数小于等于6，那么将红黑树转换回链表
+                            ln = (lc <= UNTREEIFY_THRESHOLD) ? untreeify(lo) :
+                                (hc != 0) ? new TreeBin<K,V>(lo) : t;
+                            hn = (hc <= UNTREEIFY_THRESHOLD) ? untreeify(hi) :
+                                (lc != 0) ? new TreeBin<K,V>(hi) : t;
+                            setTabAt(nextTab, i, ln);
+                            setTabAt(nextTab, i + n, hn);
+                          // 将原数组该位置处设置为 fwd，代表该位置已经处理完毕，
+                            setTabAt(tab, i, fwd);
+                           // advance 设置为 true，代表该位置已经迁移完毕
+                            advance = true;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+```
+
+## HashTable为什么慢？
+
+hashTable 中使用了 synchronized 对 put等操作进行加锁，并且 synchronized 锁住的是hashTable， 因此并发度不高，效率很低
+
+## JDK1.7
+
+
+
+JDK1.7中采用的是一种分段锁的机制实现的 ConcurrentHashMap , ConcurrentHashMap在对象中保存了一个Segment数组，即将整个Hash表划分为多个分段；**而每个Segment 类似于一个Hashtable **, 并发操作的时候对每个 Segment 加锁即可，这样相比于 HashTable 就提高了并发度
+
+>Segments 数组 大小默认为 16 ，且初始化之后不能变， 执行构造函数的时候就回初始化完成
+
+### 构造函数
+
+initialCapacity:  整个 hashMap的容量，实际操作的时候需要平均分给每个 Segment。
+
+loadFactor：负载因子，用于 Segments 扩容
+
+concurrencyLevel： 并发数， 默认为16 ，并发数要 >= Segment数组的长度
+
+```java
+public ConcurrentHashMap(int initialCapacity,
+                             float loadFactor, int concurrencyLevel) {
+        if (!(loadFactor > 0) || initialCapacity < 0 || concurrencyLevel <= 0)
+            throw new IllegalArgumentException();
+        if (concurrencyLevel > MAX_SEGMENTS)
+            concurrencyLevel = MAX_SEGMENTS;
+        // Find power-of-two sizes best matching arguments
+        int sshift = 0;
+  // Segment 数组的长度，为2^n
+        int ssize = 1;
+        while (ssize < concurrencyLevel) {
+            ++sshift;
+            ssize <<= 1;
+        }
+        this.segmentShift = 32 - sshift;
+        this.segmentMask = ssize - 1;
+        if (initialCapacity > MAXIMUM_CAPACITY)
+            initialCapacity = MAXIMUM_CAPACITY;
+  
+     // initialCapacity 是设置整个 map 初始的大小，
+    // 这里根据 initialCapacity 计算 Segment 数组中每个位置可以分到的大小
+  // 最后计算出的cap 就是 每个 Segment 中 entry 的个数
+        int c = initialCapacity / ssize;
+        if (c * ssize < initialCapacity)
+            ++c;
+        int cap = MIN_SEGMENT_TABLE_CAPACITY;
+        while (cap < c)
+            cap <<= 1;
+  
+        // 初始化 Segment 数组
+  //  并创建数组的第一个元素 segment[0]
+  // 为什么要在这里创建 Segment[0] 呢？ 那是因为创建 Segment 的时候会需要用到一些 Segment的元数据 ，例如 entry 的长度， loadFactor，详情请看  ensureSegment方法的源码
+        Segment<K,V> s0 =
+            new Segment<K,V>(loadFactor, (int)(cap * loadFactor),
+                             (HashEntry<K,V>[])new HashEntry[cap]);
+        Segment<K,V>[] ss = (Segment<K,V>[])new Segment[ssize];
+        UNSAFE.putOrderedObject(ss, SBASE, s0); // ordered write of segments[0]
+        this.segments = ss;
+    }
+```
+
+
+
+### Put
+
+```java
+public V put(K key, V value) {
+    Segment<K,V> s;
+    if (value == null)
+        throw new NullPointerException();
+  
+    int hash = hash(key);
+  // 根据 hash 值找到 Segment 数组中的位置 j ，即找到相应的 Segment
+    int j = (hash >>> segmentShift) & segmentMask;
+    if ((s = (Segment<K,V>)UNSAFE.getObject          // nonvolatile; recheck
+         (segments, (j << SSHIFT) + SBASE)) == null) //  in ensureSegment
+      
+        s = ensureSegment(j);
+    return s.put(key, hash, value, false);
+}
+```
+
+#### ensureSegment
+
+该方法用于创建 Segment
+
+```java
+    private Segment<K,V> ensureSegment(int k) {
+        final Segment<K,V>[] ss = this.segments;
+        long u = (k << SSHIFT) + SBASE; // raw offset
+        Segment<K,V> seg;
+        if ((seg = (Segment<K,V>)UNSAFE.getObjectVolatile(ss, u)) == null) {
+            Segment<K,V> proto = ss[0]; // use segment 0 as prototype
+            int cap = proto.table.length;
+            float lf = proto.loadFactor;
+            int threshold = (int)(cap * lf);
+          // 初始化 segment[k] 内部的数组
+            HashEntry<K,V>[] tab = (HashEntry<K,V>[])new HashEntry[cap];
+          
+            if ((seg = (Segment<K,V>)UNSAFE.getObjectVolatile(ss, u))== null) { // recheck
+              // 创建Segment
+                Segment<K,V> s = new Segment<K,V>(lf, threshold, tab);
+              // 使用while 循环 + CAS的方式 来保证只有一个线程会成功初始化 Segment
+                while ((seg = (Segment<K,V>)UNSAFE.getObjectVolatile(ss, u))== null) {
+                    if (UNSAFE.compareAndSwapObject(ss, u, null, seg = s))
+                        break;
+                }
+            }
+        }
+        return seg;
+    }
+```
+
+####  Segment 类内部的 Put方法
+
+ConcurrentHashMap 中的 put方法最终也是调用的 Segment 类内部的 put方法完成对数据的插入
+
+```java
+final V put(K key, int hash, V value, boolean onlyIfAbsent) {
+  // 先尝试加锁，加锁不成功则调用 scanAndLockForPut 方法
+            HashEntry<K,V> node = tryLock() ? null :
+                scanAndLockForPut(key, hash, value);
+            V oldValue;
+  // 到这里肯定加锁成功了
+            try {
+                HashEntry<K,V>[] tab = table;
+                int index = (tab.length - 1) & hash;
+                HashEntry<K,V> first = entryAt(tab, index);
+                for (HashEntry<K,V> e = first;;) {
+                    if (e != null) {
+                        K k;
+                      // 看是否是相同的元素
+                        if ((k = e.key) == key ||
+                            (e.hash == hash && key.equals(k))) {
+                            oldValue = e.value;
+                            if (!onlyIfAbsent) {
+                                e.value = value;
+                                ++modCount;
+                            }
+                            break;
+                        }
+                        e = e.next;
+                    }
+                    else {
+                      // e ==null ，说明没有hashMap中没有相同的元素
+                        if (node != null)
+                          // ，将新插入的节点设置为头节点（头插法）
+                            node.setNext(first);
+                        else
+                            node = new HashEntry<K,V>(hash, key, value, first);
+                      
+                        int c = count + 1;
+                      //   Segment 中的元素数量超过了阈值 ，扩容
+                        if (c > threshold && tab.length < MAXIMUM_CAPACITY)
+                            rehash(node);
+                        else
+                            setEntryAt(tab, index, node);
+                        ++modCount;
+                        count = c;
+                        oldValue = null;
+                        break;
+                    }
+                }
+            } finally {
+                unlock();
+            }
+            return oldValue;
+        }
+```
+
+#### rehash
+
+```java
+private void rehash(HashEntry<K,V> node) {
+  
+    HashEntry<K,V>[] oldTable = table;
+    int oldCapacity = oldTable.length;
+    int newCapacity = oldCapacity << 1;
+  // 新的阈值
+    threshold = (int)(newCapacity * loadFactor);
+    HashEntry<K,V>[] newTable =(HashEntry<K,V>[]) new HashEntry[newCapacity];
+    int sizeMask = newCapacity - 1;
+  
+    for (int i = 0; i < oldCapacity ; i++) {
+        HashEntry<K,V> e = oldTable[i];
+        if (e != null) {
+            HashEntry<K,V> next = e.next;
+        	// 计算应该放置在新数组中的位置，
+          // 假设原数组长度为 16，e 在 oldTable[3] 处，那么 idx 只可能是 3 或者是 3 + 16 = 19
+          
+            int idx = e.hash & sizeMask;
+          // 这个链表只有一个元素，直接迁移即可
+            if (next == null)   //  Single node on list
+                newTable[idx] = e;
+          
+            else { // Reuse consecutive sequence at same slot
+              
+              // e 是链表表头
+                HashEntry<K,V> lastRun = e;
+                int lastIdx = idx;
+        // 下面这个 for 循环会找到一个 lastRun 节点，这个节点之后的所有元素是将要放到一起的,
+              // 即lastRun之后的元素的对应新的 Segment 的数组下标都相同
+                for (HashEntry<K,V> last = next; last != null; last = last.next) {
+                    int k = last.hash & sizeMask;
+                    if (k != lastIdx) {
+                        lastIdx = k;
+                        lastRun = last;
+                    }
+                }
+              // 将lastRun及其之后的节点之间迁移到newTable
+                newTable[lastIdx] = lastRun;
+     					
+              // 对lastRun之前到节点进行处理，遍历所有的节点，一个一个迁移
+                for (HashEntry<K,V> p = e; p != lastRun; p = p.next) {
+                    V v = p.value;
+                    int h = p.hash;
+                    int k = h & sizeMask;
+                    HashEntry<K,V> n = newTable[k];
+                    newTable[k] = new HashEntry<K,V>(h, p.key, v, n);
+                }
+            }
+        }
+    }
+  // 将新添加的node 添加进newTable中
+    int nodeIndex = node.hash & sizeMask; // add the new node
+    node.setNext(newTable[nodeIndex]);
+    newTable[nodeIndex] = node;
+  
+    table = newTable;
+}
+```
+
+### get
+
+```java
+public V get(Object key) {
+    Segment<K,V> s; // manually integrate access methods to reduce overhead
+    HashEntry<K,V>[] tab;
+    int h = hash(key);
+  // 这个hash值对应的 Segment 的下标
+    long u = (((h >>> segmentShift) & segmentMask) << SSHIFT) + SBASE;
+  
+  // 2. 根据 下标 找到对应的 segment
+    if ((s = (Segment<K,V>)UNSAFE.getObjectVolatile(segments, u)) != null &&
+        (tab = s.table) != null) {
+      
+      // 找到segment 内部 entry 数组相应位置的链表，遍历
+        for (HashEntry<K,V> e = (HashEntry<K,V>) UNSAFE.getObjectVolatile
+                 (tab, ((long)(((tab.length - 1) & h)) << TSHIFT) + TBASE);
+             e != null; e = e.next) {
+            K k;
+          // 存在这个元素
+            if ((k = e.key) == key || (e.hash == h && key.equals(k)))
+                return e.value;
+        }
+    }
+    return null;
+}
+```
+
+# BlockingQueue
+
+实现 BlockingQueue 接口的有`ArrayBlockingQueue, DelayQueue, LinkedBlockingDeque, LinkedBlockingQueue, LinkedTransferQueue, PriorityBlockingQueue, SynchronousQueue`
+
+## ArrayBlockingQueue
+
+ArrayBlockingQueue 是一个使用数组实现的**有界**阻塞队列，ArrayBlockingQueue 一旦创建，容量不能改变。
+
+
+
+## LinkedBlockingQueue
+
+LinkedBlockingQueue 是用链表实现的有界阻塞队列，同样满足 FIFO 的特性，与 ArrayBlockingQueue 相比起来具有更高的吞吐量，为了防止 LinkedBlockingQueue 容量迅速增，损耗大量内存。通常在创建 LinkedBlockingQueue 对象时，会指定其大小，如果未指定，容量等于 Integer.MAX_VALUE
+
+## LinkedBlockingDeque
+
+LinkedBlockingDeque 是基于链表数据结构的**有界阻塞双端队列**，如果在创建对象时为指定大小时，其默认大小为 Integer.MAX_VALUE。与 LinkedBlockingQueue 相比，主要的不同点在于，LinkedBlockingDeque 具有双端队列的特性。
+
+
+
+## PriorityBlockingQueue
+
+PriorityBlockingQueue 是一个支持优先级的无界阻塞队列（类似于堆）。基于数组实现的，默认长度为11，最大长度为Integer.MAX_VALUE - 8。
+
+默认情况下元素采用自然顺序从小到大排序，也可以通过自定义类实现 compareTo()方法来指定元素排序规则，或者初始化时通过构造器参数 Comparator 来指定排序规则。
+
+
+
+## SynchronousQueue（同步队列）
+
+SynchronousQueue 每个插入操作必须等待另一个线程进行相应的删除操作，因此，SynchronousQueue 实际上没有存储任何数据元素，因为只有线程在删除数据时，其他线程才能插入数据，同样的，如果当前有线程在插入数据时，线程才能删除数据。
+
+>使用场景：
+>
+>1. `Executors.newCachedThreadPool` 中使用 `SynchronousQueue` 来实现任务的直接交接。
+>
+>2. 传递数据：在两个线程之间直接传递数据，而不需要中间缓存。
+
+## LinkedTransferQueue
+
+LinkedTransferQueue 是一个由链表数据结构构成的无界阻塞队列，由于该队列实现了 TransferQueue 接口
+
+和其他阻塞队列的区别是：
+
+**`transfer(E e)`**：如果有消费者正在等待接收元素，则直接传递元素；否则阻塞直到元素被消费。
+
+**`tryTransfer(E e)`**：尝试立即传递元素，如果没有消费者等待，则返回 `false`。
+
+**`tryTransfer(E e, long timeout, TimeUnit unit)`**：在指定的时间内尝试传递元素，如果超时则返回 `false`。
+
+
+
+## DelayQueue(延迟队列)
+
+`DelayQueue` 是一个无界阻塞队列，用于存储实现了 `Delayed` 接口的元素 , 队列中的元素只有在其延迟期满后才能被提取.
+
+具体使用可以查看如下的例子：
+
+```java
+@Slf4j
+public class delayQueue {
+    @SneakyThrows
+    public static void main(String[] args) {
+        DelayQueue<DelayedElement> queue = new DelayQueue<>();
+
+        DelayedElement element = new DelayedElement(1000, "hello");
+
+        ExecutorService executorService = Executors.newFixedThreadPool(3);
+
+        executorService.execute(new Runnable() {
+            @Override
+            public void run() {
+                queue.put(element);
+                log.info("放入元素");
+            }
+        });
+
+        executorService.execute(new Runnable() {
+            @Override
+            public void run() {
+
+                DelayedElement e = null;
+                try {
+                    e = queue.take();
+                } catch (InterruptedException ex) {
+                    throw new RuntimeException(ex);
+                }
+                log.info("取出元素{}", e.getMessage());
+            }
+        });
+
+    }
+
+    @Getter
+    static class DelayedElement implements Delayed {
+
+        private final long delayTime;
+        private final long expireTime;
+        private final String message;
+
+        public DelayedElement(long delayTime, String message) {
+            this.delayTime = delayTime;
+            this.expireTime = delayTime + System.currentTimeMillis();
+            this.message = message;
+        }
+
+        @Override
+        public long getDelay(TimeUnit unit) {
+            long diffTime = unit.convert(expireTime - System.currentTimeMillis(), TimeUnit.MILLISECONDS);
+            return diffTime;
+        }
+
+        @Override
+        public int compareTo(Delayed other) {
+            return (int) (this.expireTime - ((DelayedElement) other).getExpireTime());
+        }
+    }
+}
+
+```
+
+# CopyOnWriteArrayList / CopyOnWriteArraySet
+
+## 设计思想
+
+我们都知道 ArrayList 是线程不安全的， 对于它的替代品，我们可以使用 Vector 或者 Collections 的静态方法将 ArrayList 包装成一个线程安全的类，但是他们内部都是使用的 synchronized 来保证线程安全，并发度很低。
+
+
+
+在实际应用中，往往都是读多写少的场景，这时候我们很容易想到使用 ReenTrantReadWriteLock ， 通过读写分离的思想， 读读之间不会阻塞，可以提升效率
+
+虽然 ReenTrantReadWriteLock 可以保证读读之间不会阻塞 ，但是当线程获取到写锁时，读线程还是会被阻塞。如果我们可以保证读写之间不会被阻塞的话，这样的话可以进一步提升效率
+
+
+
+CopyOnWriteArrayList 使用了 COW 的思想，通过写时复制 + 延迟更新 来保证数据的最终一致性，并且读线程一定不会被阻塞。
+
+简单来说就是在更新 list 的时候，先将原list 复制一份，在新的list中更新数据，更新完毕之后替换旧的list。并发读的时候不需加锁，因为当前的list不会添加元素，这样放弃了数据的强一致性提高了效率
+
+
+
+```java
+//  array 是 volatile的
+private transient volatile Object[] array;
+```
+
+
+
+## get方法实现
+
+可以看出跟单线程的实现没什么区别
+
+```java
+   public E get(int index) {
+        return get(getArray(), index);
+    }
+    private E get(Object[] a, int index) {
+        return (E) a[index];
+    }
+```
+
+
+
+## add方法实现
+
+```java
+public boolean add(E e) {
+    final ReentrantLock lock = this.lock;
+  // 加锁保证同时只有一个线程写数据
+    lock.lock();
+    try {
+        Object[] elements = getArray();
+        int len = elements.length;
+      // 将旧的数据复制一份
+        Object[] newElements = Arrays.copyOf(elements, len + 1);
+      // 在末尾添加新元素
+        newElements[len] = e;
+     // 将旧数组引用指向新的数组
+        setArray(newElements);
+        return true;
+    } finally {
+        lock.unlock();
+    }
+}
+```
+
+
+
+## 缺点
+
+**内存占用问题**：因为 CopyOnWrite 的写时复制机制，所以在进行写操作的时候，内存里会同时驻扎两个对象的内存，旧的对象和新写入的对象，如果list比较大，例如200M ，那么cow 就会比较浪费内存
+
+**数据一致性问题**：CopyOnWrite 容器只能保证数据的最终一致性，不能保证数据的实时一致性。
+
+
+
+
 
 
 
 # ThreadLocal
 
-TODO:
+**顾名思义，ThreadLocal 就是线程的“本地变量”，即每个线程都拥有该变量的一个副本，达到人手一份的目的，这样就可以避免共享资源的竞争，这样就没有线程安全 问题了**。这就是一种“**空间换时间**”的思想，每个线程拥有自己的“共享资源”，虽然内存占用变大了，但由于不需要同步，也就减少了线程可能存在的阻塞问题，从而提高时间上的效率。
 
-#  变量的线程安全分析
+
+
+## ThreadLocal 是如何实现线程资源的隔离
+
+比较容易想到的方法就是把 ThreadLocal 看作一个 Map ，然后每个线程是一个 key ，这样每个线程调用 get 方法获取值的时候，将自己作为 key 去 map中获取值即可。但是这样的话 ThreadLocal 就成了共享变量，多线程访问 ThreadLocal 时又得保证线程安全。but ThreadLocal 就是用来避免共享资源的竞争，因此这样子设计肯定是不合理的。
+
+
+
+**jdk1.8中的设计方案：**
+
+每个线程中有一个 map ，key 为ThreadLocal ，value 为对应的值。这样每个线程就可以根据 ThreadLocal 去对应 map 中找到对应的值
+
+这里的map和 hashMap有点类似
+
+- 同样是使用数组存储元素，数组的长度为 2^n
+- 当entry的个数达到一定的数量的时候也会进行扩容（容量的2/3）
+- 采用了线性探测再散列的方式解决 hash 冲突 ， 而不是使用拉链法
+- entry 的 key 是弱引用（下文会讲）
+
+```java
+ // thread 对象中的 map
+ThreadLocal.ThreadLocalMap threadLocals = null;
+
+
+static class ThreadLocalMap {
+        static class Entry extends WeakReference<ThreadLocal<?>> {
+            /** The value associated with this ThreadLocal. */
+            Object value;
+
+            Entry(ThreadLocal<?> k, Object v) {
+                super(k);
+                value = v;
+            }
+        }
+
+        /**
+         * The initial capacity -- MUST be a power of two.
+         */
+        private static final int INITIAL_CAPACITY = 16;
+
+        /**
+         * The table, resized as necessary.
+         * table.length MUST always be a power of two.
+         */
+        private Entry[] table;
+
+        /**
+         * The number of entries in the table.
+         */
+        private int size = 0;
+
+        /**
+         * The next size value at which to resize.
+         */
+        private int threshold; // Default to 0
+
+}
+```
+
+## 理解ThreadLocal中的内存泄漏问题
+
+### ThreadLocalMap 中的 key 为强引用时
+
+看下面这张内存的引用图
+
+- 若key 为强引用，当ThreadLocal使用完了，置为了 null ，但此时由于 entry 中的key 还是强引用，导致堆中的 ThreadLocal 对象不能被回收，发生了内存泄漏
+- 在没有手动删除这个 entry 以及 线程仍然运行的情况下，有这样一条强引用链 currentThreadRef -> currentThread -> Map -> entry，因此 entry 会内存泄漏
+
+![image-20240805163005209](https://img.leftover.cn/img-md/202408051630387.png)
+
+### ThreadLocalMap 中的 key 为弱引用时
+
+- 当 key 为弱引用时，当ThreadLocal使用完了，置为了 null ，此时没有任何强引用指向 ThreadLocal ，因此 ThreadLocal 可以被顺利 GC ，此时 entry 中的 key == null
+
+- 在没有手动删除这个 entry 以及 线程仍然运行的情况下，有这样一条强引用链 currentThreadRef -> currentThread -> Map -> entry，因此 entry 会内存泄漏
+
+>因此即使 key 使用了弱引用， 也可能发生内存泄漏
+
+  <img src="https://img.leftover.cn/img-md/202408051637613.png" alt="image-20240805163753565" style="zoom: 33%;" />
+
+
+
+### jdk中为解决内存泄漏做出的努力
+
+为了解决这个内存泄漏的问题，jdk中在很多地方都做了清理无用的 key 的操作（即清除 key ==null 的entry）
+
+remove 操作
+
+<img src="https://img.leftover.cn/img-md/202408051655544.png" alt="image-20240805165509434" style="zoom:33%;" />
+
+set 操作
+
+<img src="https://img.leftover.cn/img-md/202408051656669.png" alt="image-20240805165654621" style="zoom:33%;" />
+
+rehash 操作
+
+<img src="https://img.leftover.cn/img-md/202408051657506.png" alt="image-20240805165731450" style="zoom:33%;" />
+
+get 操作
+
+<img src="https://img.leftover.cn/img-md/202408051659967.png" alt="image-20240805165931841" style="zoom:33%;" />
+
+
+
+### 总结
+
+从上面的分析可以看出，当 key 使用了弱引用，此时 ThreadLocal 变量不会发生内存泄漏，但是若没有不手动清除不需要的 entry ，还是会导致 entry 发生内存泄漏。这里的清除有两种方法：
+
+- 关闭线程。关闭线程之后线程就被回收了，因此线程中的 map 也就被 GC 了
+- 调用remove方法。
+
+但是，我们平常在项目中经常是使用线程池，线程不会被销毁，所以这就要求我们开发者养成良好的习惯，使用完了 ThreadLocal 要手动 remove 掉，以防止内存泄漏
+
+
+
+## ThreadLocal的使用场景
+
+ThreadLocal 的使用场景非常多，比如说：
+
+- 用于保存用户登录信息，这样在同一个线程中的任何地方都可以获取到登录信息。
+- 用于保存数据库连接、Session 对象等，这样在同一个线程中的任何地方都可以获取到数据库连接、Session 对象等。
+- 用于保存事务上下文，这样在同一个线程中的任何地方都可以获取到事务上下文。
+- 用于保存线程中的变量，这样在同一个线程中的任何地方都可以获取到线程中的变量。
+- 在日志记录中，可以使用 ThreadLocal 来存储每个线程的日志上下文信息，例如请求 ID，以便在日志中跟踪特定请求的所有操作。
+
+## TransmittableThreadLocal
+
+我们都知道 ThreadLocal 中保存的是当前线程的数据，想象一下有这样一个场景，父线程创建了一个子线程，想要将父线程中 ThreadLocal 的值传递给子线程,这时候如果还是使用 ThreadLocal 的话，子线程就获取不到父线程中 ThreadLocal 中的值，具体可以看下面的代码
+
+```java
+        IntegerThreadLocal threadLocal = new IntegerThreadLocal();
+        threadLocal.set(100);
+
+        new Thread(new Runnable() {
+            @Override
+            public void run() {
+                log.info("{}", threadLocal.get()); // null
+            }
+        }, "t1").start();
+        log.info("{}", threadLocal.get()); // 100
+
+```
+
+基于上面的问题，我们有了 InheritableThreadLocal 
+
+### InheritableThreadLocal
+
+由于ThreadLocal父线程无法传递本地变量到子线程中，于是JDK引入了InheritableThreadLocal类，该类的首部描述：该类继承了ThreadLocal类，用以实现父线程到子线程的值继承；创建子线程时，子线程将接收父线程具有值的所有可继承线程局部变量的初始值。通常子线程的值与父线程相同；子线程的值可以被父线程重写的方法改变。
+
+**InheritableThreadLocal的原理：**
+
+Thread的源码中有这样一个成员属性，类似于 `threadLocals` ,只不过它的针对是 InheritableThreadLocal ，key 存储的是 InheritableThreadLocal ，value存储对应的值
+
+```java
+ThreadLocal.ThreadLocalMap inheritableThreadLocals = null;
+```
+
+
+
+在线程初始化的代码中有这么一行，他会将父线程的 inheritableThreadLocals 变量拷贝到 子线程中，因此这样就实现了父线程到子线程的变量传递
+
+```java
+ private void init(ThreadGroup g, Runnable target, String name,
+                      long stackSize, AccessControlContext acc,
+                      boolean inheritThreadLocals) { 
+   ...
+if (inheritThreadLocals && parent.inheritableThreadLocals != null)
+            this.inheritableThreadLocals =
+                ThreadLocal.createInheritedMap(parent.inheritableThreadLocals);
+   
+ }
+```
+
+测试代码：
+
+下面的测试代码中，父子线程都输出了 100，成功地将父线程的 ThreadLocal 的数据传递给了子线程
+
+```java
+        ThreadLocal<Integer> threadLocal = new InheritableThreadLocal<>();
+
+        threadLocal.set(100);
+
+        new Thread(new Runnable() {
+            @Override
+            public void run() {
+                log.info("{}", threadLocal.get()); // 100
+            }
+        }, "t1").start();
+        log.info("{}", threadLocal.get()); // 100
+```
+
+
+
+### InheritableThreadLocal在其他场景存在的问题
+
+从上面的例子中可以看出，只有在线程初始化的时候才会将父线程的 inheritableThreadLocals 复制到子线程，但是在项目中我们经常是使用线程池，因此复用的是线程池中的线程，inheritableThreadLocals 在线程池的场景下就不管用了
+
+### TransmittableThreadLocal
+
+TransmittableThreadLocal 就是为了解决在使用线程池的时候需要传递 ThreadLocal 值的问题
+
+```xml
+   <!--引入依赖 -->
+	<dependency>
+      <groupId>com.alibaba</groupId>
+      <artifactId>transmittable-thread-local</artifactId>
+      <version>2.14.5</version>
+    </dependency>
+
+```
+
+#### 修饰线程池
+```java
+
+       ThreadLocal<Integer> threadLocal = new TransmittableThreadLocal<>();
+				// 包装线程池
+        ExecutorService executorService = TtlExecutors.getTtlExecutorService(Executors.newFixedThreadPool(2));
+
+        for (int i = 0; i < 5; i++) {
+            threadLocal.set(i);
+            executorService.execute(new Runnable() {
+                @Override
+                public void run() {
+                    log.info("{}", threadLocal.get());
+                }
+            });
+        }
+```
+#### 使用Java Agent来修饰JDK线程池实现类
+
+这种方式，实现线程池的传递是透明的，业务代码中没有修饰`Runnable`或是线程池的代码。即可以做到应用代码 **无侵入**。
+
+>1. 配置启动参数，点击 Add VM options 
+>2. 添加 -javaagent:path/to/transmittable-thread-local-2.x.y.jar
+
+
+
+
+
+
+
+
+
+# 变量的线程安全分析
 
 
 
