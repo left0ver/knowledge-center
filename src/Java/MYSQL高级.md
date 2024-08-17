@@ -561,7 +561,7 @@ TODO：
 
 2. 优化数据库的表结构，添加冗余字段，减少join的次数
 
-3. 根据业务的实际情况调整mysql的参数配置（具体查看[优化 MySQL 的配置的场景参数](#优化 MySQL 的配置的场景参数)）
+3. 根据业务的实际情况调整mysql的参数配置（具体查看[优化 MySQL 的配置的场景参数](#优化MySQL的配置的场景参数)）
 
 4. 分库分表，搭建主从、读写分离
 
@@ -864,7 +864,7 @@ select * from information_schema.optimizer_trace;
 
 # Reference
 
-## 优化 MySQL 的配置的场景参数
+## 优化MySQL的配置的场景参数
 
 - `innodb_buffer_pool_size` ：这个参数是Mysql数据库最重要的参数之一，表示InnoDB类型的表和索引的最大缓存 。它不仅仅缓存索引数据 ，还会缓存表的数据 。这个值越大，查询的速度就会越快。但是这个值太大会影响操作系统的性能。
 
