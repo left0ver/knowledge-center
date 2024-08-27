@@ -10,13 +10,14 @@
     "prepare": "husky"
   },
   "lint-staged": {
-    "*.md": "lint-md --fix"
+    "*.md": "npx lint-md --fix"
   },
   "keywords": [],
   "author": "left0ver",
   "license": "CC BY-NC-SA",
   "devDependencies": {
     "@iconify/json": "^2.2.225",
+    "@lint-md/cli": "^2.0.0",
     "husky": "^9.1.5",
     "less": "^4.2.0",
     "lint-staged": "^15.2.9",
