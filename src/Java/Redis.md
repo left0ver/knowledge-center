@@ -7,7 +7,7 @@ brew install redis
 ```
 
 配置文件位于`/opt/homebrew/etc/redis.conf`
-11
+
 
 
 ## Redis 可视化管理工具
