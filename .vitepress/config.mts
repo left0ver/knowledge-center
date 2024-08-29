@@ -84,10 +84,10 @@ export default defineConfig({
           { text: 'Mybatis-plus', link: 'Mybatis-plus' },
           { text: 'Springboot', link: 'springboot' },
           { text: 'JSR', link: 'JSR' },
+          {text: 'Redis', link: 'Redis'},
           {text: 'SQL',link: 'sql'},
           {text: 'MySQL高级', link: 'MYSQL高级'},
           {text: 'Maven', link: 'Maven'},
-          {text: 'Redis', link: 'Redis'},
           {text: 'Java面试题', link: 'Java面试题'},
           {text: 'IDEA常用快捷键',link: 'IDEA常用快捷键'}
         ]
