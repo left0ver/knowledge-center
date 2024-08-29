@@ -1979,7 +1979,7 @@ SDS 是一个结构体：
 
 ### 为什么需要 listpack，listpack 解决了什么问题？
 
-​    Listpack 可以说是用来替代 ziplist 的，zipList 是一种特殊的双向链表（不适应指针来找到它前一个或者后一个元素），它的 entry 是使用 `prebious_entry_length` 记录前一个节点的长度，从而实现从后往前遍历，使用 `encoding` 来记录当前节点的数据类型和长度，从而知道当前节点的长度，实现从前往后遍历。因为使用`prebious_entry_length` 记录前一个节点的长度，因此它有`连锁更新`的问题
+​    Listpack 可以说是用来替代 ziplist 的，zipList 是一种特殊的双向链表（不使用指针来找到它前一个或者后一个元素），它的 entry 是使用 `prebious_entry_length` 记录前一个节点的长度，从而实现从后往前遍历，使用 `encoding` 来记录当前节点的数据类型和长度，从而知道当前节点的长度，实现从前往后遍历。因为使用`prebious_entry_length` 记录前一个节点的长度，因此它有`连锁更新`的问题
 
 ​    在 Listpack 中，每一个 entry 只记录自己的长度，因此在新增或者修改元素时，只会涉及当前 entry 的更新，而不会影响到别的 entry，从而避免了连锁更新
 
