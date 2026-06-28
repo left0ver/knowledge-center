@@ -7,6 +7,6 @@ hero:
   actions:
     - theme: brand
       text: Start
-      link: /Java/JavaSE
+      link: /python/python基础
 ---
 
