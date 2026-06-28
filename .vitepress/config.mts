@@ -122,31 +122,6 @@ export default defineConfig({
       message: 'Released under the CC BY-NC-SA License.',
       copyright: 'Copyright © 2024-present <a href="https://github.com/left0ver">leftover</a>'
     },
-  
-    sidebar: [
-      {
-        text: 'Java',
-        base:"/Java/",
-        collapsed: false,
-        items: [
-          { text: 'JavaSE', link: 'JavaSE' },
-          { text: 'JavaWeb', link: 'JavaWeb' },
-          {text: 'JUC', link: 'JUC'},
-          {text: 'Spring', link: 'spring6'},
-          { text: 'SpringMVC', link: 'springmvc' },
-          { text: 'Mybatis', link: 'Mybatis' },
-          { text: 'Mybatis-plus', link: 'Mybatis-plus' },
-          { text: 'Springboot', link: 'springboot' },
-          { text: 'JSR', link: 'JSR' },
-          {text: 'Redis', link: 'Redis'},
-          {text: 'SQL',link: 'sql'},
-          {text: 'MySQL高级', link: 'MYSQL高级'},
-          {text: 'Maven', link: 'Maven'},
-          {text: 'Java面试题', link: 'Java面试题'},
-          {text: 'IDEA常用快捷键',link: 'IDEA常用快捷键'}
-        ]
-      },
-    ],
     socialLinks: [
       {
         icon: {
