@@ -1,4 +1,5 @@
 import { defineConfig } from 'vitepress'
+import { katex } from '@mdit/plugin-katex'
 export default defineConfig({
   lang: 'zh-Hans',
   title: "leftover's 知识库",
@@ -33,7 +34,14 @@ export default defineConfig({
   ],
   cleanUrls: true,
   markdown: {
-    lineNumbers: true
+    lineNumbers: true,
+    config(md) {
+      md.use(katex, {
+        allowInlineWithSpace: true,
+        mathFence: true,
+        throwOnError: false,
+      })
+    }
   },
 
   themeConfig: {
@@ -41,7 +49,7 @@ export default defineConfig({
     nav: [
     ],
     outline: {
-      level: [1, 2],
+      level: [1, 3],
       label: "大纲"
     },
     editLink: {
@@ -68,55 +76,56 @@ export default defineConfig({
       {
         text: 'python',
         items: [
+          { text: 'python基础', link: '/python/python基础' },
           { text: '机器学习', link: '/python/机器学习' },
           { text: '机器学习的数据预处理的一些方法', link: '/python/机器学习的数据预处理的一些方法' },
+          { text: '深度学习', link: '/python/深度学习' },
           { text: '李沐动手学深度学习的一些笔记', link: '/python/李沐动手学深度学习的一些笔记' },
-          { text: '模型剪枝', link: '/python/模型剪枝' },
-          { text: '模型量化', link: '/python/模型量化' },
+          { text: 'opencv学习', link: '/python/opencv学习' },
           { text: '目标检测经典算法', link: '/python/目标检测经典算法' },
           { text: '如何发布python包', link: '/python/如何发布python包' },
-          { text: '深度学习', link: '/python/深度学习' },
+          { text: '模型剪枝', link: '/python/模型剪枝' },
+          { text: '模型量化', link: '/python/模型量化' },
+          { text: 'NLP', link: '/python/NLP' },
           { text: '学习bert', link: '/python/学习bert' },
+          { text: 'transformer学习', link: '/python/transformer学习' },
           { text: 'how_to_build_a_tokenizer_by_tokenizers', link: '/python/how_to_build_a_tokenizer_by_tokenizers' },
           { text: 'llms_from_scratch的相关学习笔记', link: '/python/llms_from_scratch的相关学习笔记' },
-          { text: 'NLP', link: '/python/NLP' },
-          { text: 'opencv学习', link: '/python/opencv学习' },
-          { text: 'python基础', link: '/python/python基础' },
-          { text: 'transformer学习', link: '/python/transformer学习' }
+        ]
+      },
+      {
+        text: 'Agent',
+        items: [
+          { text: 'RAG', link: '/Agent/RAG' },
+          { text: 'study_langchain', link: '/Agent/study_langchain' },
+          { text: 'study_langgraph', link: '/Agent/study_langgraph' },
+          { text: '使用charles来进行抓包', link: '/Agent/使用charles来进行抓包' },
+          { text: 'claude code和codex的skills的实现原理', link: '/Agent/claude code和codex的skills的实现原理' },
+          { text: '使用openai sdk创建一个ReAct循环', link: '/Agent/使用openai sdk创建一个ReAct循环' },
+          { text: 'langgraph的一些经验', link: '/Agent/langgraph的一些经验' },
         ]
       },
       {
         text: '分布式训练',
         items: [
           { text: '分布式训练', link: '/分布式训练/分布式训练' },
-          { text: '各种分布式训练中需要注意的点', link: '/分布式训练/各种分布式训练中需要注意的点' },
-          { text: '在docker中使用GPU进行训练', link: '/分布式训练/在docker中使用GPU进行训练' },
-          { text: '在vscode 中调试分布式训练的代码', link: '/分布式训练/在vscode 中调试分布式训练的代码' },
+          { text: 'FSDP1', link: '/分布式训练/FSDP1' },
           { text: 'DeepSpeed', link: '/分布式训练/DeepSpeed' },
-          { text: 'FSDP1', link: '/分布式训练/FSDP1' }
+          { text: '在vscode 中调试分布式训练的代码', link: '/分布式训练/在vscode 中调试分布式训练的代码' },
+          { text: '在docker中使用GPU进行训练', link: '/分布式训练/在docker中使用GPU进行训练' },
+          { text: '各种分布式训练中需要注意的点', link: '/分布式训练/各种分布式训练中需要注意的点' },
         ]
       },
       {
         text: '其他',
         items: [
-          { text: '如何同时配置llamafactory、unsloth、vllm的环境', link: '/其他/如何同时配置llamafactory、unsloth、vllm的环境' },
+          { text: 'ubuntu配置环境', link: '/其他/ubuntu配置环境' },
           { text: 'linux上搭建pytorch环境', link: '/其他/linux上搭建pytorch环境' },
+          { text: '如何同时配置llamafactory、unsloth、vllm的环境', link: '/其他/如何同时配置llamafactory、unsloth、vllm的环境' },
           { text: 'ssh服务器上使用codex', link: '/其他/ssh服务器上使用codex' },
-          { text: 'ubuntu配置环境', link: '/其他/ubuntu配置环境' }
         ]
       },
-      {
-        text: 'Agent',
-        items: [
-          { text: '使用charles来进行抓包', link: '/Agent/使用charles来进行抓包' },
-          { text: '使用openai sdk创建一个ReAct循环', link: '/Agent/使用openai sdk创建一个ReAct循环' },
-          { text: 'claude code和codex的skills的实现原理', link: '/Agent/claude code和codex的skills的实现原理' },
-          { text: 'langgraph的一些经验', link: '/Agent/langgraph的一些经验' },
-          { text: 'RAG', link: '/Agent/RAG' },
-          { text: 'study_langchain', link: '/Agent/study_langchain' },
-          { text: 'study_langgraph', link: '/Agent/study_langgraph' }
-        ]
-      }
+
     ],
     footer: {
       message: 'Released under the CC BY-NC-SA License.',
